@@ -32,8 +32,10 @@ app.get('/api/health', async (req, res) => {
 // Base Route
 app.get('/api', (req, res) => {
   res.json({
-    message: 'Welcome to the SecOps Academy REST API',
+    message: 'SecOps CyberDefenders',
     version: '1.0.0',
+    status: 'Development',
+    description: 'Plataforma para aprendizaje de ciberseguridad',
     endpoints: {
       health: '/api/health'
     }
