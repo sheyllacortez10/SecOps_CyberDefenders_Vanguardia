@@ -1,0 +1,1051 @@
+openapi: 3.0.3
+info:
+  title: SecOps Academy API
+  description: |
+    API REST para **SecOps Academy**, plataforma web interactiva para el aprendizaje
+    guiado de ciberseguridad en desarrollo seguro.
+
+    La plataforma permite a los usuarios explorar vulnerabilidades del OWASP Top 10
+    mediante escenarios estáticos, fragmentos de código vulnerables y laboratorios
+    interactivos guiados.
+
+    ## Actores del sistema
+    - **Estudiante:** puede registrarse, resolver laboratorios y consultar su progreso.
+    - **Administrador:** puede gestionar el catálogo de laboratorios y consultar métricas.
+
+    ## Autenticación
+    Todos los endpoints protegidos requieren un token JWT en el header `Authorization`.
+  version: 1.0.0
+  contact:
+    name: Equipo SecOps Academy
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:3000/api
+    description: Servidor de desarrollo local
+  - url: https://api.secopsacademy.com/api
+    description: Servidor de producción
+
+tags:
+  - name: Auth
+    description: Registro e inicio de sesión de usuarios
+  - name: Labs
+    description: Catálogo y detalle de laboratorios de vulnerabilidades
+  - name: Resolution
+    description: Envío y validación de respuestas de laboratorios
+  - name: Progress
+    description: Progreso, historial e insignias del estudiante
+  - name: Admin
+    description: Gestión administrativa de laboratorios (requiere rol admin)
+
+paths:
+
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Registrar un nuevo usuario
+      description: Crea una cuenta de estudiante en la plataforma.
+      operationId: registerUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+            example:
+              name: "Ana Gómez"
+              email: "ana.gomez@example.com"
+              password: "SecurePass123!"
+      responses:
+        '201':
+          description: Usuario registrado exitosamente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: El correo electrónico ya está registrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                status: 409
+                message: "El correo electrónico ya está en uso."
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Iniciar sesión
+      description: Autentica al usuario y retorna un token JWT.
+      operationId: loginUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            example:
+              email: "ana.gomez@example.com"
+              password: "SecurePass123!"
+      responses:
+        '200':
+          description: Inicio de sesión exitoso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: Credenciales inválidas
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                status: 401
+                message: "Correo o contraseña incorrectos."
+
+  /labs:
+    get:
+      tags: [Labs]
+      summary: Listar laboratorios disponibles
+      description: |
+        Retorna el catálogo completo de laboratorios. Permite filtrar por categoría
+        de vulnerabilidad OWASP y por nivel de dificultad.
+      operationId: getLabs
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: category
+          in: query
+          description: Filtrar por categoría OWASP (e.g. injection, xss, broken-auth)
+          schema:
+            type: string
+            example: "injection"
+        - name: difficulty
+          in: query
+          description: Filtrar por nivel de dificultad
+          schema:
+            type: string
+            enum: [beginner, intermediate, advanced]
+        - name: page
+          in: query
+          description: Número de página para paginación
+          schema:
+            type: integer
+            default: 1
+            minimum: 1
+        - name: limit
+          in: query
+          description: Cantidad de resultados por página
+          schema:
+            type: integer
+            default: 10
+            minimum: 1
+            maximum: 50
+      responses:
+        '200':
+          description: Lista de laboratorios
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LabListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /labs/{id}:
+    get:
+      tags: [Labs]
+      summary: Obtener detalle de un laboratorio
+      description: |
+        Retorna el detalle completo de un laboratorio, incluyendo la descripción
+        de la vulnerabilidad, el fragmento de código vulnerable y las actividades
+        interactivas asociadas.
+      operationId: getLabById
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/labId'
+      responses:
+        '200':
+          description: Detalle del laboratorio
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LabDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /labs/{id}/submit:
+    post:
+      tags: [Resolution]
+      summary: Enviar respuesta de un laboratorio
+      description: |
+        Valida la respuesta del estudiante para una actividad del laboratorio.
+        El sistema puede utilizar coincidencia exacta, lista de respuestas válidas
+        o validación por palabras clave. Retorna retroalimentación inmediata y
+        actualiza el puntaje del usuario.
+      operationId: submitLabAnswer
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/labId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitRequest'
+            example:
+              activityId: "act-001"
+              answer: "parameterized_query"
+      responses:
+        '200':
+          description: Resultado de la validación con retroalimentación
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmitResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /progress/{userId}:
+    get:
+      tags: [Progress]
+      summary: Consultar progreso del usuario
+      description: |
+        Retorna el progreso general del estudiante: puntaje acumulado, porcentaje
+        de avance, laboratorios completados y puntos de defensa obtenidos.
+      operationId: getUserProgress
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/userId'
+      responses:
+        '200':
+          description: Progreso del usuario
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProgress'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /history/{userId}:
+    get:
+      tags: [Progress]
+      summary: Consultar historial de intentos
+      description: |
+        Retorna el historial completo de intentos realizados por el usuario,
+        incluyendo fecha, laboratorio, respuesta enviada y resultado obtenido.
+      operationId: getUserHistory
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/userId'
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: Historial de intentos del usuario
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HistoryResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /badges/{userId}:
+    get:
+      tags: [Progress]
+      summary: Consultar insignias obtenidas
+      description: |
+        Retorna las insignias (badges) que el usuario ha desbloqueado al completar
+        categorías específicas de vulnerabilidades.
+      operationId: getUserBadges
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/userId'
+      responses:
+        '200':
+          description: Lista de insignias del usuario
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BadgesResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /admin/labs:
+    post:
+      tags: [Admin]
+      summary: Crear laboratorio precargado
+      description: |
+        Permite al administrador crear un nuevo laboratorio con su vulnerabilidad,
+        fragmento de código y actividades asociadas. Requiere rol `admin`.
+      operationId: createLab
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LabCreateRequest'
+      responses:
+        '201':
+          description: Laboratorio creado exitosamente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LabDetail'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /admin/labs/{id}:
+    put:
+      tags: [Admin]
+      summary: Editar laboratorio precargado
+      description: |
+        Actualiza los datos de un laboratorio existente. Requiere rol `admin`.
+      operationId: updateLab
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/labId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LabUpdateRequest'
+      responses:
+        '200':
+          description: Laboratorio actualizado exitosamente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LabDetail'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      tags: [Admin]
+      summary: Eliminar laboratorio
+      description: Elimina un laboratorio del catálogo. Requiere rol `admin`.
+      operationId: deleteLab
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/labId'
+      responses:
+        '204':
+          description: Laboratorio eliminado exitosamente
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /admin/metrics:
+    get:
+      tags: [Admin]
+      summary: Consultar métricas básicas
+      description: |
+        Retorna métricas generales de la plataforma: total de usuarios registrados,
+        laboratorios completados, intentos realizados y laboratorios más populares.
+        Requiere rol `admin`.
+      operationId: getMetrics
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Métricas generales de la plataforma
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Token JWT obtenido en el endpoint de login.
+
+  parameters:
+    labId:
+      name: id
+      in: path
+      required: true
+      description: Identificador único del laboratorio
+      schema:
+        type: string
+        example: "lab-001"
+    userId:
+      name: userId
+      in: path
+      required: true
+      description: Identificador único del usuario
+      schema:
+        type: string
+        example: "user-42"
+
+  responses:
+    BadRequest:
+      description: Datos de entrada inválidos
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            status: 400
+            message: "El campo 'email' es requerido."
+    Unauthorized:
+      description: Token ausente o inválido
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            status: 401
+            message: "No autenticado. Token inválido o expirado."
+    Forbidden:
+      description: Sin permisos para realizar esta acción
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            status: 403
+            message: "Acceso denegado. Se requiere rol de administrador."
+    NotFound:
+      description: Recurso no encontrado
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            status: 404
+            message: "El recurso solicitado no existe."
+
+  schemas:
+
+    RegisterRequest:
+      type: object
+      required: [name, email, password]
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 100
+          example: "Ana Gómez"
+        email:
+          type: string
+          format: email
+          example: "ana.gomez@example.com"
+        password:
+          type: string
+          format: password
+          minLength: 8
+          description: Mínimo 8 caracteres, debe incluir letras y números.
+          example: "SecurePass123!"
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          example: "ana.gomez@example.com"
+        password:
+          type: string
+          format: password
+          example: "SecurePass123!"
+
+    AuthResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: Token JWT para autenticar solicitudes posteriores.
+          example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+        user:
+          $ref: '#/components/schemas/UserSummary'
+
+    UserSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "user-42"
+        name:
+          type: string
+          example: "Ana Gómez"
+        email:
+          type: string
+          example: "ana.gomez@example.com"
+        role:
+          type: string
+          enum: [student, admin]
+          example: "student"
+        createdAt:
+          type: string
+          format: date-time
+          example: "2026-06-05T10:00:00Z"
+
+    LabSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "lab-001"
+        title:
+          type: string
+          example: "SQL Injection en formulario de login"
+        description:
+          type: string
+          example: "Aprende a identificar y prevenir inyecciones SQL en consultas dinámicas."
+        category:
+          type: string
+          example: "injection"
+        owaspRef:
+          type: string
+          description: Referencia al OWASP Top 10
+          example: "A03:2021"
+        difficulty:
+          type: string
+          enum: [beginner, intermediate, advanced]
+          example: "beginner"
+        points:
+          type: integer
+          description: Puntos de defensa otorgados al completar el laboratorio.
+          example: 100
+        completedByUser:
+          type: boolean
+          description: Indica si el usuario autenticado ya completó este laboratorio.
+          example: false
+
+    LabListResponse:
+      type: object
+      properties:
+        total:
+          type: integer
+          example: 25
+        page:
+          type: integer
+          example: 1
+        limit:
+          type: integer
+          example: 10
+        labs:
+          type: array
+          items:
+            $ref: '#/components/schemas/LabSummary'
+
+    LabDetail:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "lab-001"
+        title:
+          type: string
+          example: "SQL Injection en formulario de login"
+        description:
+          type: string
+          example: "Aprende a identificar y prevenir inyecciones SQL en consultas dinámicas."
+        category:
+          type: string
+          example: "injection"
+        owaspRef:
+          type: string
+          example: "A03:2021"
+        difficulty:
+          type: string
+          enum: [beginner, intermediate, advanced]
+          example: "beginner"
+        points:
+          type: integer
+          example: 100
+        theory:
+          type: string
+          description: Explicación teórica breve sobre la vulnerabilidad.
+          example: "La inyección SQL ocurre cuando datos no validados se insertan en una consulta SQL..."
+        vulnerableCode:
+          type: string
+          description: Fragmento de código vulnerable para análisis.
+          example: "const query = `SELECT * FROM users WHERE email = '${email}'`;"
+        vulnerability:
+          $ref: '#/components/schemas/Vulnerability'
+        activities:
+          type: array
+          items:
+            $ref: '#/components/schemas/Activity'
+        createdAt:
+          type: string
+          format: date-time
+          example: "2026-01-15T08:00:00Z"
+        updatedAt:
+          type: string
+          format: date-time
+          example: "2026-05-20T12:00:00Z"
+
+    Vulnerability:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "vuln-sqli"
+        name:
+          type: string
+          example: "SQL Injection"
+        owaspCategory:
+          type: string
+          example: "A03:2021 - Injection"
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+          example: "critical"
+        cweId:
+          type: string
+          example: "CWE-89"
+
+    Activity:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "act-001"
+        type:
+          type: string
+          enum: [multiple_choice, line_selection, fill_in, order_steps]
+          description: |
+            - multiple_choice: pregunta de opción múltiple
+            - line_selection: seleccionar líneas seguras o inseguras
+            - fill_in: completar un fragmento corto de código
+            - order_steps: ordenar pasos de mitigación
+          example: "multiple_choice"
+        question:
+          type: string
+          example: "¿Cuál es la forma correcta de prevenir SQL Injection en esta consulta?"
+        options:
+          type: array
+          description: Opciones disponibles (para multiple_choice y order_steps).
+          items:
+            type: string
+          example:
+            - "Usar concatenación de strings"
+            - "Usar consultas parametrizadas"
+            - "Escapar manualmente los caracteres especiales"
+            - "Deshabilitar los mensajes de error SQL"
+        validationStrategy:
+          type: string
+          enum: [exact_match, keyword_match, predefined_list]
+          example: "predefined_list"
+
+    SubmitRequest:
+      type: object
+      required: [activityId, answer]
+      properties:
+        activityId:
+          type: string
+          example: "act-001"
+        answer:
+          description: Respuesta del estudiante (string, índice de opción o lista de strings).
+          oneOf:
+            - type: string
+              example: "parameterized_query"
+            - type: integer
+              example: 1
+            - type: array
+              items:
+                type: string
+              example: ["step-3", "step-1", "step-2"]
+
+    SubmitResponse:
+      type: object
+      properties:
+        correct:
+          type: boolean
+          description: Indica si la respuesta fue correcta.
+          example: true
+        pointsEarned:
+          type: integer
+          description: Puntos de defensa ganados en este intento (0 si incorrecto).
+          example: 100
+        feedback:
+          type: string
+          description: Retroalimentación narrativa sobre la respuesta.
+          example: "¡Correcto! La aplicación resistió el ataque. Las consultas parametrizadas separan el código SQL de los datos."
+        simulationResult:
+          type: string
+          enum: [attack_blocked, attack_succeeded]
+          description: Resultado de la simulación visual.
+          example: "attack_blocked"
+        explanation:
+          type: string
+          description: Explicación detallada de la solución correcta.
+          example: "Usar PreparedStatement o consultas parametrizadas evita que los datos del usuario sean interpretados como código SQL."
+        attempt:
+          $ref: '#/components/schemas/AttemptSummary'
+
+    AttemptSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "attempt-789"
+        labId:
+          type: string
+          example: "lab-001"
+        activityId:
+          type: string
+          example: "act-001"
+        correct:
+          type: boolean
+          example: true
+        answeredAt:
+          type: string
+          format: date-time
+          example: "2026-06-05T14:30:00Z"
+
+    UserProgress:
+      type: object
+      properties:
+        userId:
+          type: string
+          example: "user-42"
+        totalPoints:
+          type: integer
+          description: Puntos de defensa acumulados.
+          example: 450
+        completedLabs:
+          type: integer
+          example: 5
+        totalLabs:
+          type: integer
+          example: 25
+        progressPercentage:
+          type: number
+          format: float
+          description: Porcentaje de laboratorios completados.
+          example: 20.0
+        badgesCount:
+          type: integer
+          example: 2
+        labsProgress:
+          type: array
+          items:
+            type: object
+            properties:
+              labId:
+                type: string
+                example: "lab-001"
+              labTitle:
+                type: string
+                example: "SQL Injection en formulario de login"
+              completed:
+                type: boolean
+                example: true
+              pointsEarned:
+                type: integer
+                example: 100
+              attempts:
+                type: integer
+                example: 2
+
+    HistoryResponse:
+      type: object
+      properties:
+        userId:
+          type: string
+          example: "user-42"
+        total:
+          type: integer
+          example: 14
+        page:
+          type: integer
+          example: 1
+        limit:
+          type: integer
+          example: 20
+        history:
+          type: array
+          items:
+            type: object
+            properties:
+              attemptId:
+                type: string
+                example: "attempt-789"
+              labId:
+                type: string
+                example: "lab-001"
+              labTitle:
+                type: string
+                example: "SQL Injection en formulario de login"
+              activityId:
+                type: string
+                example: "act-001"
+              answer:
+                type: string
+                example: "parameterized_query"
+              correct:
+                type: boolean
+                example: true
+              pointsEarned:
+                type: integer
+                example: 100
+              answeredAt:
+                type: string
+                format: date-time
+                example: "2026-06-05T14:30:00Z"
+
+    BadgesResponse:
+      type: object
+      properties:
+        userId:
+          type: string
+          example: "user-42"
+        badges:
+          type: array
+          items:
+            $ref: '#/components/schemas/Badge'
+
+    Badge:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "badge-injection"
+        name:
+          type: string
+          example: "Defensor contra Inyecciones"
+        description:
+          type: string
+          example: "Completaste todos los laboratorios de la categoría Injection."
+        category:
+          type: string
+          example: "injection"
+        iconUrl:
+          type: string
+          format: uri
+          example: "https://api.secopsacademy.com/assets/badges/injection.png"
+        unlockedAt:
+          type: string
+          format: date-time
+          example: "2026-06-05T15:00:00Z"
+
+    LabCreateRequest:
+      type: object
+      required: [title, description, category, owaspRef, difficulty, points, theory, vulnerableCode, vulnerabilityId, activities]
+      properties:
+        title:
+          type: string
+          example: "XSS Reflejado en campo de búsqueda"
+        description:
+          type: string
+          example: "Aprende a identificar y prevenir Cross-Site Scripting en parámetros de URL."
+        category:
+          type: string
+          example: "xss"
+        owaspRef:
+          type: string
+          example: "A03:2021"
+        difficulty:
+          type: string
+          enum: [beginner, intermediate, advanced]
+          example: "intermediate"
+        points:
+          type: integer
+          minimum: 10
+          example: 150
+        theory:
+          type: string
+          example: "XSS ocurre cuando scripts maliciosos son inyectados en páginas web vistas por otros usuarios..."
+        vulnerableCode:
+          type: string
+          example: "document.getElementById('result').innerHTML = userInput;"
+        vulnerabilityId:
+          type: string
+          example: "vuln-xss"
+        activities:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/ActivityCreateRequest'
+
+    ActivityCreateRequest:
+      type: object
+      required: [type, question, validationStrategy, correctAnswer]
+      properties:
+        type:
+          type: string
+          enum: [multiple_choice, line_selection, fill_in, order_steps]
+          example: "multiple_choice"
+        question:
+          type: string
+          example: "¿Qué función usarías para sanitizar la salida en el navegador?"
+        options:
+          type: array
+          items:
+            type: string
+          example:
+            - "innerHTML"
+            - "textContent"
+            - "outerHTML"
+            - "document.write"
+        correctAnswer:
+          description: Respuesta o respuestas correctas para la validación.
+          oneOf:
+            - type: string
+              example: "textContent"
+            - type: array
+              items:
+                type: string
+        validationStrategy:
+          type: string
+          enum: [exact_match, keyword_match, predefined_list]
+          example: "exact_match"
+        explanation:
+          type: string
+          example: "textContent es seguro porque no interpreta HTML, evitando la ejecución de scripts."
+
+    LabUpdateRequest:
+      type: object
+      description: Todos los campos son opcionales; solo se actualizan los enviados.
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+        owaspRef:
+          type: string
+        difficulty:
+          type: string
+          enum: [beginner, intermediate, advanced]
+        points:
+          type: integer
+          minimum: 10
+        theory:
+          type: string
+        vulnerableCode:
+          type: string
+        activities:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActivityCreateRequest'
+
+    MetricsResponse:
+      type: object
+      properties:
+        totalUsers:
+          type: integer
+          example: 320
+        totalLabs:
+          type: integer
+          example: 25
+        totalAttempts:
+          type: integer
+          example: 1540
+        completedAttempts:
+          type: integer
+          example: 980
+        successRate:
+          type: number
+          format: float
+          description: Porcentaje de intentos correctos sobre el total.
+          example: 63.6
+        topLabs:
+          type: array
+          description: Los 5 laboratorios con más intentos.
+          items:
+            type: object
+            properties:
+              labId:
+                type: string
+                example: "lab-001"
+              labTitle:
+                type: string
+                example: "SQL Injection en formulario de login"
+              attempts:
+                type: integer
+                example: 210
+              successRate:
+                type: number
+                format: float
+                example: 71.4
+
+    ErrorResponse:
+      type: object
+      properties:
+        status:
+          type: integer
+          example: 404
+        message:
+          type: string
+          example: "El recurso solicitado no existe."
+        details:
+          type: array
+          description: Lista de errores de validación (opcional).
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+                example: "email"
+              issue:
+                type: string
+                example: "Formato de correo inválido."
