@@ -1,10 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
 type Role = 'student' | 'admin';
 type View = 'auth' | 'dashboard' | 'lab' | 'create-lab' | 'view-labs';
 
 interface Lab {
-  id: number;
+  id: string;
   titulo: string;
   descripcion: string;
   categoria: string;
@@ -18,52 +18,194 @@ export default function App() {
   const [password, setPassword] = useState('');
   const [isRegister, setIsRegister] = useState(false);
   const [userName, setUserName] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
 
-  const [user, setUser] = useState<{ name: string; email: string; role: Role } | null>(null);
+  const [user, setUser] = useState<{ id: string; name: string; email: string; role: Role } | null>(() => {
+    const saved = localStorage.getItem('secops_user');
+    return saved ? JSON.parse(saved) : null;
+  });
   const [points, setPoints] = useState(0);
   const [completedLabs, setCompletedLabs] = useState(0);
+  const [completedLabIds, setCompletedLabIds] = useState<string[]>([]);
+  const [userBadges, setUserBadges] = useState<any[]>([]);
+  const [adminMetrics, setAdminMetrics] = useState<{ totalUsers: number; totalLabs: number; successRate: number } | null>(null);
 
+  const [labs, setLabs] = useState<Lab[]>([]);
+  const [selectedLabDetail, setSelectedLabDetail] = useState<any | null>(null);
+  const [currentActivityIndex, setCurrentActivityIndex] = useState(0);
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [correct, setCorrect] = useState<boolean | null>(null);
   const [simulationState, setSimulationState] = useState<'idle' | 'attack_success' | 'attack_blocked'>('idle');
 
-  // ── Laboratorios (estado simulado) ──
-  const [labs, setLabs] = useState<Lab[]>([
-    { id: 1, titulo: 'SQL Injection en Formulario de Login', descripcion: 'Aprende cómo funciona la concatenación directa de parámetros y cómo mitigar ataques usando consultas parametrizadas.', categoria: 'SQL Injection', dificultad: 'Fácil', puntajeMaximo: 100 },
-    { id: 2, titulo: 'Cross-Site Scripting (XSS) Reflejado', descripcion: 'Identifica y mitiga ataques XSS reflejados en formularios de búsqueda.', categoria: 'XSS', dificultad: 'Medio', puntajeMaximo: 150 },
-    { id: 3, titulo: 'Broken Authentication con JWT', descripcion: 'Analiza tokens JWT mal configurados y aprende a validarlos correctamente.', categoria: 'Autenticación', dificultad: 'Difícil', puntajeMaximo: 200 },
-  ]);
-
   // ── Formulario Crear Lab ──
   const [newLab, setNewLab] = useState({ titulo: '', descripcion: '', categoria: '', dificultad: 'Fácil', puntajeMaximo: 100 });
   const [createSuccess, setCreateSuccess] = useState(false);
 
-  const handleAuth = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!email || !password) return;
-    const detectedRole: Role = email.includes('admin') ? 'admin' : 'student';
-    const name = isRegister ? userName : (detectedRole === 'admin' ? 'Administrador SecOps' : 'Estudiante de Prueba');
-    setUser({ name, email, role: detectedRole });
-    setView('dashboard');
+  // Helper para mapear labs del backend al frontend
+  const mapBackendLab = (b: any): Lab => ({
+    id: b.id,
+    titulo: b.title,
+    descripcion: b.description,
+    categoria: b.category === 'injection' ? 'SQL Injection' : b.category.toUpperCase(),
+    dificultad: b.difficulty === 'beginner' ? 'Fácil' : (b.difficulty === 'intermediate' ? 'Medio' : 'Difícil'),
+    puntajeMaximo: b.points
+  });
+
+  // Helper de llamadas API
+  const apiCall = async (url: string, options: RequestInit = {}) => {
+    const token = localStorage.getItem('secops_token');
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+      ...(options.headers || {})
+    };
+    const response = await fetch(url, { ...options, headers });
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || errorData.message || 'Error en la petición.');
+    }
+    return response.json();
   };
 
-  const handleVerifyLab = () => {
-    if (!selectedAnswer) return;
-    if (selectedAnswer === 'B') {
-      setCorrect(true);
-      setFeedback('¡Correcto! Las consultas parametrizadas separan completamente la lógica de la query de los datos de entrada del usuario.');
-      setPoints(100);
-      setCompletedLabs(1);
-      setSimulationState('attack_blocked');
-    } else {
-      setCorrect(false);
-      setFeedback('Error: El ataque tuvo éxito. Al concatenar directamente la entrada, el motor de base de datos interpretó los datos como código ejecutable.');
-      setSimulationState('attack_success');
+  const loadUserData = async (userId: string) => {
+    try {
+      const progressData = await apiCall(`/api/progress/${userId}`);
+      setPoints(progressData.totalPoints);
+      setCompletedLabs(progressData.completedLabs);
+
+      const completed = progressData.labsProgress
+        ? progressData.labsProgress.filter((p: any) => p.completed).map((p: any) => p.labId)
+        : [];
+      setCompletedLabIds(completed);
+
+      const badgesData = await apiCall(`/api/badges/${userId}`);
+      setUserBadges(badgesData.badges || []);
+    } catch (err) {
+      console.error('Error al cargar progreso de usuario:', err);
+    }
+  };
+
+  const loadLabs = async () => {
+    try {
+      const data = await apiCall('/api/labs');
+      setLabs(data.labs.map(mapBackendLab));
+    } catch (err) {
+      console.error('Error al cargar laboratorios:', err);
+    }
+  };
+
+  const loadAdminMetrics = async () => {
+    try {
+      const data = await apiCall('/api/admin/metrics');
+      setAdminMetrics(data);
+    } catch (err) {
+      console.error('Error al cargar métricas:', err);
+    }
+  };
+
+  // Cargar datos si hay sesión activa al montar
+  useEffect(() => {
+    if (user) {
+      setView('dashboard');
+      loadUserData(user.id);
+      loadLabs();
+      if (user.role === 'admin') {
+        loadAdminMetrics();
+      }
+    }
+  }, []);
+
+  const handleAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email || !password) return;
+    setErrorMsg('');
+
+    try {
+      const endpoint = isRegister ? '/api/auth/register' : '/api/auth/login';
+      const body = isRegister ? { name: userName, email, password } : { email, password };
+
+      const data = await apiCall(endpoint, {
+        method: 'POST',
+        body: JSON.stringify(body)
+      });
+
+      localStorage.setItem('secops_token', data.token);
+      localStorage.setItem('secops_user', JSON.stringify(data.user));
+
+      setUser(data.user);
+      setView('dashboard');
+      loadUserData(data.user.id);
+      loadLabs();
+      if (data.user.role === 'admin') {
+        loadAdminMetrics();
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Error en la autenticación.');
+    }
+  };
+
+  const startLab = async (labId: string) => {
+    try {
+      const data = await apiCall(`/api/labs/${labId}`);
+      setSelectedLabDetail(data);
+      setCurrentActivityIndex(0);
+      setSelectedAnswer(null);
+      setFeedback(null);
+      setCorrect(null);
+      setSimulationState('idle');
+      setView('lab');
+    } catch (err: any) {
+      alert(err.message || 'Error al iniciar laboratorio.');
+    }
+  };
+
+  const handleVerifyLab = async () => {
+    if (!selectedAnswer || !selectedLabDetail) return;
+    const activity = selectedLabDetail.activities[currentActivityIndex];
+    if (!activity) return;
+
+    try {
+      const result = await apiCall(`/api/labs/${selectedLabDetail.id}/activities/${activity.id}/submit`, {
+        method: 'POST',
+        body: JSON.stringify({
+          userId: user?.id,
+          answer: selectedAnswer
+        })
+      });
+
+      setCorrect(result.correct);
+      setFeedback(result.explanation || (result.correct ? '¡Respuesta correcta!' : 'Respuesta incorrecta.'));
+
+      if (result.correct) {
+        setSimulationState('attack_blocked');
+        if (result.pointsEarned > 0) {
+          setPoints(prev => prev + result.pointsEarned);
+        }
+        if (result.labCompleted) {
+          setCompletedLabs(prev => prev + 1);
+          setCompletedLabIds(prev => {
+            if (!prev.includes(selectedLabDetail.id)) {
+              return [...prev, selectedLabDetail.id];
+            }
+            return prev;
+          });
+        }
+        if (result.unlockedBadge) {
+          setUserBadges(prev => [...prev, result.unlockedBadge]);
+          alert(`🏆 ¡Felicidades! Has desbloqueado una nueva insignia: ${result.unlockedBadge.name}`);
+        }
+      } else {
+        setSimulationState('attack_success');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Error al validar la respuesta.');
     }
   };
 
   const handleLogout = () => {
+    localStorage.removeItem('secops_token');
+    localStorage.removeItem('secops_user');
     setUser(null);
     setView('auth');
     setEmail('');
@@ -72,20 +214,75 @@ export default function App() {
     setFeedback(null);
     setCorrect(null);
     setSimulationState('idle');
+    setLabs([]);
+    setUserBadges([]);
+    setAdminMetrics(null);
+    setCompletedLabIds([]);
   };
 
-  const handleCreateLab = (e: React.FormEvent) => {
+  const handleCreateLab = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newLab.titulo || !newLab.descripcion || !newLab.categoria) return;
-    const created: Lab = { id: labs.length + 1, ...newLab };
-    setLabs(prev => [...prev, created]);
-    setNewLab({ titulo: '', descripcion: '', categoria: '', dificultad: 'Fácil', puntajeMaximo: 100 });
-    setCreateSuccess(true);
-    setTimeout(() => setCreateSuccess(false), 3000);
+
+    try {
+      const difficultyMapping: Record<string, string> = {
+        'Fácil': 'beginner',
+        'Medio': 'intermediate',
+        'Difícil': 'advanced'
+      };
+
+      const body = {
+        title: newLab.titulo,
+        description: newLab.descripcion,
+        category: newLab.categoria.toLowerCase(),
+        owaspRef: 'A03:2021',
+        difficulty: difficultyMapping[newLab.dificultad] || 'beginner',
+        points: newLab.puntajeMaximo,
+        theory: 'Las inyecciones de código ocurren cuando las entradas del usuario se concatenan directamente en sentencias que luego se ejecutan. En el caso de SQL, esto permite manipular la lógica de la consulta original.',
+        vulnerableCode: 'const query = `SELECT * FROM users WHERE email = \'${email}\' AND password = \'${password}\'`;',
+        vulnerabilityId: 'vuln-sqli',
+        activities: [
+          {
+            type: 'multiple_choice',
+            question: '¿Cuál es la mitigación correcta contra la inyección SQL?',
+            options: [
+              'Validar el formato del email en el cliente',
+              'Usar consultas parametrizadas (Prepared Statements)',
+              'Codificar el texto de entrada en base64'
+            ],
+            validationStrategy: 'predefined_list',
+            correctAnswer: 'Usar consultas parametrizadas (Prepared Statements)',
+            explanation: 'Las consultas parametrizadas envían la consulta y los parámetros de forma separada al motor SQL, previniendo que la entrada altere la estructura del comando.'
+          }
+        ]
+      };
+
+      await apiCall('/api/admin/labs', {
+        method: 'POST',
+        body: JSON.stringify(body)
+      });
+
+      setNewLab({ titulo: '', descripcion: '', categoria: '', dificultad: 'Fácil', puntajeMaximo: 100 });
+      setCreateSuccess(true);
+      setTimeout(() => setCreateSuccess(false), 3000);
+      loadLabs();
+      loadAdminMetrics();
+    } catch (err: any) {
+      alert(err.message || 'Error al crear laboratorio.');
+    }
   };
 
-  const handleDeleteLab = (id: number) => {
-    setLabs(prev => prev.filter(l => l.id !== id));
+  const handleDeleteLab = async (id: string) => {
+    if (!window.confirm('¿Estás seguro de eliminar este laboratorio de forma permanente?')) return;
+    try {
+      await apiCall(`/api/admin/labs/${id}`, {
+        method: 'DELETE'
+      });
+      loadLabs();
+      loadAdminMetrics();
+    } catch (err: any) {
+      alert(err.message || 'Error al eliminar laboratorio.');
+    }
   };
 
   // ── Shared styles ──
@@ -149,6 +346,13 @@ export default function App() {
             <h2 style={{ marginBottom: '1.5rem', textAlign: 'center' }}>
               {isRegister ? 'Crear Cuenta' : 'Iniciar Sesión'}
             </h2>
+
+            {errorMsg && (
+              <div style={{ color: 'var(--color-danger)', background: 'rgba(255,74,90,0.1)', padding: '0.75rem', borderRadius: '6px', marginBottom: '1rem', fontSize: '0.9rem', textAlign: 'center', border: '1px solid rgba(255,74,90,0.2)' }}>
+                ⚠️ {errorMsg}
+              </div>
+            )}
+
             <form onSubmit={handleAuth}>
               {isRegister && (
                 <div className="form-group">
@@ -160,7 +364,7 @@ export default function App() {
                 <label className="form-label">Correo Electrónico</label>
                 <input type="email" className="form-input" placeholder="ejemplo@secops.com" value={email} onChange={e => setEmail(e.target.value)} required />
                 <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'block', marginTop: '4px' }}>
-                  Tip: escribe "admin@secops.com" para iniciar como administrador.
+                  Tip: escribe "admin@secops.com" o "estudiante@secops.com" (password: AdminPass123! o StudentPass123!) para usar las cuentas pre-creadas.
                 </span>
               </div>
               <div className="form-group">
@@ -173,7 +377,10 @@ export default function App() {
             </form>
             <p style={{ textAlign: 'center', marginTop: '1.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
               {isRegister ? '¿Ya tienes cuenta?' : '¿No tienes cuenta?'}&nbsp;
-              <span style={{ color: 'var(--color-secondary)', cursor: 'pointer', textDecoration: 'underline' }} onClick={() => setIsRegister(!isRegister)}>
+              <span style={{ color: 'var(--color-secondary)', cursor: 'pointer', textDecoration: 'underline' }} onClick={() => {
+                setIsRegister(!isRegister);
+                setErrorMsg('');
+              }}>
                 {isRegister ? 'Inicia Sesión' : 'Regístrate aquí'}
               </span>
             </p>
@@ -195,15 +402,21 @@ export default function App() {
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.5rem', marginBottom: '2rem' }}>
                 <div className="card" style={{ background: 'rgba(255,74,90,0.05)' }}>
                   <h3 style={{ fontSize: '1.1rem', marginBottom: '0.5rem' }}>Total Usuarios</h3>
-                  <p style={{ fontSize: '2.5rem', fontWeight: 'bold', color: 'var(--color-danger)' }}>320</p>
+                  <p style={{ fontSize: '2.5rem', fontWeight: 'bold', color: 'var(--color-danger)' }}>
+                    {adminMetrics?.totalUsers ?? 0}
+                  </p>
                 </div>
                 <div className="card">
                   <h3 style={{ fontSize: '1.1rem', marginBottom: '0.5rem' }}>Laboratorios Activos</h3>
-                  <p style={{ fontSize: '2.5rem', fontWeight: 'bold', color: 'var(--text-primary)' }}>{labs.length}</p>
+                  <p style={{ fontSize: '2.5rem', fontWeight: 'bold', color: 'var(--text-primary)' }}>
+                    {labs.length}
+                  </p>
                 </div>
                 <div className="card">
                   <h3 style={{ fontSize: '1.1rem', marginBottom: '0.5rem' }}>Tasa de Éxito Promedio</h3>
-                  <p style={{ fontSize: '2.5rem', fontWeight: 'bold', color: 'var(--color-primary)' }}>63.6%</p>
+                  <p style={{ fontSize: '2.5rem', fontWeight: 'bold', color: 'var(--color-primary)' }}>
+                    {adminMetrics?.successRate ?? 0}%
+                  </p>
                 </div>
               </div>
               <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
@@ -212,9 +425,6 @@ export default function App() {
                 </button>
                 <button className="btn btn-secondary" onClick={() => setView('view-labs')}>
                   Ver Laboratorios
-                </button>
-                <button className="btn btn-secondary" onClick={() => alert('Ver Reportes de Estudiantes')}>
-                  Ver Reporte Completo
                 </button>
               </div>
             </div>
@@ -227,48 +437,91 @@ export default function App() {
                 <div className="card glow-green">
                   <h3>Puntos de Defensa</h3>
                   <p style={{ fontSize: '2.5rem', fontWeight: 'bold', color: 'var(--color-primary)', margin: '0.5rem 0' }}>{points} pts</p>
-                  <span className="badge-unlocked">🛡️ Rango: Recluta SecOps</span>
+                  <span className="badge-unlocked">🛡️ Rango: Defensor SecOps</span>
                 </div>
                 <div className="card">
                   <h3>Progreso de Laboratorios</h3>
-                  <p style={{ fontSize: '2.5rem', fontWeight: 'bold', margin: '0.5rem 0' }}>{completedLabs} / 1</p>
+                  <p style={{ fontSize: '2.5rem', fontWeight: 'bold', margin: '0.5rem 0' }}>
+                    {completedLabs} / {labs.length || 1}
+                  </p>
                   <div style={{ background: 'rgba(255,255,255,0.1)', height: '8px', borderRadius: '4px', overflow: 'hidden' }}>
-                    <div style={{ background: 'var(--color-secondary)', width: completedLabs > 0 ? '100%' : '0%', height: '100%', transition: 'width 0.5s ease' }} />
+                    <div style={{
+                      background: 'var(--color-secondary)',
+                      width: `${labs.length ? (completedLabs / labs.length) * 100 : 0}%`,
+                      height: '100%',
+                      transition: 'width 0.5s ease'
+                    }} />
                   </div>
                 </div>
                 <div className="card">
                   <h3>Insignias Obtenidas</h3>
-                  <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem' }}>
-                    {completedLabs > 0 ? (
-                      <div className="badge-unlocked" style={{ padding: '0.5rem 0.75rem', fontSize: '0.8rem' }}>🥇 Defensor de Inyecciones</div>
+                  <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem', flexWrap: 'wrap' }}>
+                    {userBadges.length > 0 ? (
+                      userBadges.map(badge => (
+                        <div key={badge.id} className="badge-unlocked" style={{ padding: '0.5rem 0.75rem', fontSize: '0.8rem' }} title={badge.description}>
+                          🥇 {badge.name}
+                        </div>
+                      ))
                     ) : (
-                      <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Completa tu primer laboratorio para obtener insignias.</span>
+                      <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                        Completa laboratorios para obtener insignias.
+                      </span>
                     )}
                   </div>
                 </div>
               </section>
+
               <section>
                 <h2 style={{ marginBottom: '1.5rem' }}>Catálogo de Laboratorios</h2>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: '1.5rem' }}>
-                  <div className="card glow-blue" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-                    <div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-                        <span style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: 'var(--color-secondary)', fontWeight: 600 }}>SQL INJECTION</span>
-                        <span style={{ fontSize: '0.75rem', background: 'rgba(0,210,255,0.1)', padding: '2px 8px', borderRadius: '4px' }}>Fácil</span>
+                {labs.length === 0 ? (
+                  <p style={{ color: 'var(--text-secondary)' }}>Cargando catálogo de laboratorios...</p>
+                ) : (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: '1.5rem' }}>
+                    {labs.map(lab => (
+                      <div key={lab.id} className="card glow-blue" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                        <div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                            <span style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: 'var(--color-secondary)', fontWeight: 600 }}>
+                              {lab.categoria}
+                            </span>
+                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                              {completedLabIds.includes(lab.id) && (
+                                <span style={{ fontSize: '0.75rem', background: 'rgba(0,245,160,0.15)', color: '#00f5a0', padding: '2px 8px', borderRadius: '4px', fontWeight: 600 }}>
+                                  ✓ Completado
+                                </span>
+                              )}
+                              <span style={{
+                                fontSize: '0.75rem',
+                                background: 'rgba(0,210,255,0.1)',
+                                padding: '2px 8px',
+                                borderRadius: '4px',
+                                color: difficultyColor(lab.dificultad)
+                              }}>
+                                {lab.dificultad}
+                              </span>
+                            </div>
+                          </div>
+                          <h3 style={{ fontSize: '1.2rem', marginBottom: '0.75rem' }}>{lab.titulo}</h3>
+                          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
+                            {lab.descripcion}
+                          </p>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: '0.85rem', color: 'var(--color-primary)', fontWeight: 600 }}>+{lab.puntajeMaximo} Puntos</span>
+                          {completedLabIds.includes(lab.id) ? (
+                            <button className="btn btn-secondary" onClick={() => startLab(lab.id)}>
+                              🔁 Repasar Lab
+                            </button>
+                          ) : (
+                            <button className="btn btn-primary" onClick={() => startLab(lab.id)}>
+                              Iniciar Laboratorio
+                            </button>
+                          )}
+                        </div>
                       </div>
-                      <h3 style={{ fontSize: '1.2rem', marginBottom: '0.75rem' }}>SQL Injection en Formulario de Login</h3>
-                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
-                        Aprende cómo funciona la concatenación directa de parámetros y cómo mitigar ataques usando consultas parametrizadas.
-                      </p>
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: '0.85rem', color: 'var(--color-primary)', fontWeight: 600 }}>+100 Puntos</span>
-                      <button className="btn btn-primary" onClick={() => setView('lab')}>
-                        {completedLabs > 0 ? 'Repasar Lab' : 'Iniciar Laboratorio'}
-                      </button>
-                    </div>
+                    ))}
                   </div>
-                </div>
+                )}
               </section>
             </div>
           )}
@@ -287,18 +540,16 @@ export default function App() {
               Crear Nuevo Laboratorio
             </h2>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '2rem' }}>
-              Completa los campos para agregar un nuevo laboratorio al catálogo de SecOps Academy.
+              Completa los campos para agregar un nuevo laboratorio de forma persistente.
             </p>
 
             {createSuccess && (
               <div style={{ padding: '0.85rem 1rem', background: 'rgba(0,245,160,0.08)', border: '1px solid rgba(0,245,160,0.3)', borderRadius: 8, color: 'var(--color-primary)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
-                ✅ Laboratorio creado exitosamente y agregado al catálogo.
+                ✅ Laboratorio creado exitosamente y persistido en la base de datos.
               </div>
             )}
 
             <form onSubmit={handleCreateLab} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-
-              {/* Título */}
               <div>
                 <label style={labelStyle}>Título del Laboratorio</label>
                 <input
@@ -311,32 +562,29 @@ export default function App() {
                 />
               </div>
 
-              {/* Descripción */}
               <div>
                 <label style={labelStyle}>Descripción</label>
                 <textarea
                   style={{ ...inputStyle, minHeight: 100, resize: 'vertical' }}
-                  placeholder="Describe el objetivo del laboratorio y qué aprenderá el estudiante..."
+                  placeholder="Describe el objetivo del laboratorio..."
                   value={newLab.descripcion}
                   onChange={e => setNewLab({ ...newLab, descripcion: e.target.value })}
                   required
                 />
               </div>
 
-              {/* Categoría */}
               <div>
-                <label style={labelStyle}>Categoría (Vulnerabilidad OWASP)</label>
+                <label style={labelStyle}>Categoría</label>
                 <input
                   style={inputStyle}
                   type="text"
-                  placeholder="Ej: XSS, SQL Injection, Autenticación..."
+                  placeholder="Ej: Injection, XSS, Autenticación..."
                   value={newLab.categoria}
                   onChange={e => setNewLab({ ...newLab, categoria: e.target.value })}
                   required
                 />
               </div>
 
-              {/* Dificultad y Puntaje en fila */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                 <div>
                   <label style={labelStyle}>Dificultad</label>
@@ -365,7 +613,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Botones */}
               <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem' }}>
                 <button type="submit" className="btn btn-primary" style={{ flex: 1, justifyContent: 'center' }}>
                   + Crear Laboratorio
@@ -374,7 +621,6 @@ export default function App() {
                   Cancelar
                 </button>
               </div>
-
             </form>
           </div>
         </main>
@@ -416,7 +662,6 @@ export default function App() {
                     className="card"
                     style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap', padding: '1.25rem' }}
                   >
-                    {/* Info */}
                     <div style={{ flex: 1, minWidth: 220 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.4rem', flexWrap: 'wrap' }}>
                         <span style={{ fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--color-secondary)', letterSpacing: '0.07em' }}>
@@ -441,14 +686,13 @@ export default function App() {
                       <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>{lab.descripcion}</p>
                     </div>
 
-                    {/* Acciones */}
                     <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexShrink: 0 }}>
                       <button
                         className="btn btn-secondary"
                         style={{ padding: '0.4rem 0.9rem', fontSize: '0.8rem' }}
-                        onClick={() => alert(`Editar laboratorio: ${lab.titulo}`)}
+                        onClick={() => alert(`Editar laboratorio está disponible a través de la API en el backend.`)}
                       >
-                        ✏️ Editar
+                        ✏️ Info
                       </button>
                       <button
                         className="btn"
@@ -467,7 +711,7 @@ export default function App() {
       )}
 
       {/* ── LAB CONSOLE ── */}
-      {view === 'lab' && (
+      {view === 'lab' && selectedLabDetail && (
         <main className="animate-fade-in">
           <button className="btn btn-secondary" style={{ marginBottom: '1.5rem' }} onClick={() => setView('dashboard')}>
             ← Volver al Dashboard
@@ -476,42 +720,97 @@ export default function App() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
               <div className="card">
                 <h2 style={{ fontSize: '1.3rem', marginBottom: '1rem', color: 'var(--color-secondary)' }}>Teoría del Ataque</h2>
-                <p style={{ fontSize: '0.95rem', color: 'var(--text-secondary)' }}>
-                  Las vulnerabilidades de inyección de código (como SQL Injection) ocurren cuando un desarrollador concatena directamente variables que contienen inputs de usuarios en comandos dinámicos.
-                  El motor de base de datos interpreta las comillas simples u operadores booleanos (como <code>' OR '1'='1</code>) como comandos de control del sistema, no como texto simple.
+                <p style={{ fontSize: '0.95rem', color: 'var(--text-secondary)', whiteSpace: 'pre-line' }}>
+                  {selectedLabDetail.theory}
                 </p>
               </div>
+
               <div className="card glow-blue">
-                <h3 style={{ fontSize: '1.1rem', marginBottom: '1rem' }}>Actividad 1: Resolución</h3>
+                <h3 style={{ fontSize: '1.1rem', marginBottom: '1rem' }}>
+                  Actividad {currentActivityIndex + 1} de {selectedLabDetail.activities.length}: Resolución
+                </h3>
                 <p style={{ fontSize: '0.95rem', marginBottom: '1rem' }}>
-                  Revisa el código vulnerable a la derecha. ¿Cuál es la opción correcta para mitigar la inyección SQL en este endpoint de login?
+                  {selectedLabDetail.activities[currentActivityIndex]?.question}
                 </p>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.5rem' }}>
-                  {[
-                    { key: 'A', text: 'Validar la longitud máxima de la contraseña en el cliente.' },
-                    { key: 'B', text: 'Modificar la consulta para utilizar marcadores de posición posicionales (como $1 y $2) y pasar los valores separados en un arreglo de parámetros (Consultas Parametrizadas).' },
-                    { key: 'C', text: 'Encriptar el valor del email en el frontend antes de enviarlo.' },
-                  ].map(opt => (
-                    <label key={opt.key} style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start', cursor: 'pointer', background: 'rgba(255,255,255,0.02)', padding: '0.75rem', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
-                      <input type="radio" name="option" checked={selectedAnswer === opt.key} onChange={() => setSelectedAnswer(opt.key)} style={{ marginTop: '3px' }} />
-                      <span><strong>{opt.key}.</strong> {opt.text}</span>
-                    </label>
-                  ))}
-                </div>
-                <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }} onClick={handleVerifyLab} disabled={!selectedAnswer}>
-                  Ejecutar Simulación y Validar
-                </button>
+
+                {selectedLabDetail.activities[currentActivityIndex]?.type === 'multiple_choice' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.5rem' }}>
+                    {selectedLabDetail.activities[currentActivityIndex].options.map((opt: string, idx: number) => {
+                      const letter = String.fromCharCode(65 + idx);
+                      return (
+                        <label key={idx} style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start', cursor: 'pointer', background: 'rgba(255,255,255,0.02)', padding: '0.75rem', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
+                          <input
+                            type="radio"
+                            name="option"
+                            checked={selectedAnswer === opt}
+                            onChange={() => setSelectedAnswer(opt)}
+                            style={{ marginTop: '3px' }}
+                            disabled={correct === true}
+                          />
+                          <span><strong>{letter}.</strong> {opt}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {selectedLabDetail.activities[currentActivityIndex]?.type === 'fill_in' && (
+                  <div style={{ marginBottom: '1.5rem' }}>
+                    <input
+                      type="text"
+                      style={inputStyle}
+                      placeholder="Escribe tu respuesta aquí y presiona validar..."
+                      value={selectedAnswer || ''}
+                      onChange={e => setSelectedAnswer(e.target.value)}
+                      disabled={correct === true}
+                    />
+                  </div>
+                )}
+
+                {correct !== true && (
+                  <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }} onClick={handleVerifyLab} disabled={!selectedAnswer}>
+                    Ejecutar Simulación y Validar
+                  </button>
+                )}
+
                 {feedback && (
                   <div style={{ marginTop: '1.5rem', padding: '1rem', borderRadius: '4px', border: '1px solid', borderColor: correct ? 'var(--color-primary)' : 'var(--color-danger)', background: correct ? 'rgba(0,245,160,0.05)' : 'rgba(255,74,90,0.05)', color: correct ? 'var(--color-primary)' : '#ff6b7a', fontSize: '0.9rem' }}>
                     {feedback}
                   </div>
                 )}
+
+                {correct === true && (
+                  currentActivityIndex < selectedLabDetail.activities.length - 1 ? (
+                    <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', marginTop: '1rem' }} onClick={() => {
+                      setCurrentActivityIndex(prev => prev + 1);
+                      setSelectedAnswer(null);
+                      setFeedback(null);
+                      setCorrect(null);
+                      setSimulationState('idle');
+                    }}>
+                      Siguiente Actividad →
+                    </button>
+                  ) : (
+                    <div style={{ marginTop: '1rem', textAlign: 'center' }}>
+                      <p style={{ color: 'var(--color-primary)', fontWeight: 'bold', marginBottom: '0.5rem' }}>
+                        🎉 ¡Laboratorio Completado con éxito!
+                      </p>
+                      <button className="btn btn-secondary" style={{ width: '100%', justifyContent: 'center' }} onClick={() => {
+                        setView('dashboard');
+                        loadUserData(user!.id);
+                      }}>
+                        Volver al Dashboard
+                      </button>
+                    </div>
+                  )
+                )}
               </div>
             </div>
+
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
               <div className="card">
                 <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem', marginBottom: '1rem' }}>
-                  <span style={{ fontSize: '0.8rem', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>server.ts (Vulnerable Code)</span>
+                  <span style={{ fontSize: '0.8rem', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>servidor (Código Vulnerable)</span>
                   <div style={{ display: 'flex', gap: '4px' }}>
                     <span style={{ display: 'block', width: '6px', height: '6px', borderRadius: '50%', background: '#ff5f56' }} />
                     <span style={{ display: 'block', width: '6px', height: '6px', borderRadius: '50%', background: '#ffbd2e' }} />
@@ -519,23 +818,10 @@ export default function App() {
                   </div>
                 </div>
                 <pre style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', overflowX: 'auto', background: 'rgba(0,0,0,0.2)', padding: '0.75rem', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
-                  {`app.post('/api/auth/login', async (req, res) => {
-  const { email, password } = req.body;
-
-  // CONCATENACIÓN DIRECTA INSEGURA:
-  const query = \`SELECT * FROM users WHERE 
-    email = '\${email}' 
-    AND password = '\${password}'\`;
-                  
-  const result = await pool.query(query);
-  if (result.rows.length > 0) {
-    res.json({ success: true, user: result.rows[0] });
-  } else {
-    res.status(401).json({ error: "No autorizado" });
-  }
-});`}
+                  {selectedLabDetail.vulnerableCode}
                 </pre>
               </div>
+
               <div className="card" style={{ background: '#05070f', border: '1px dashed var(--border-color)' }}>
                 <h3 style={{ fontSize: '1.1rem', marginBottom: '1rem', color: 'var(--text-secondary)' }}>Pantalla de Simulación de Ataque</h3>
                 {simulationState === 'idle' && (
