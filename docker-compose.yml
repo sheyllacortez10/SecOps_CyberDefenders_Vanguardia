@@ -10,6 +10,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: secops_academy
     ports:
+      # Mapeo al puerto 5433 en host para evitar conflictos con PostgreSQL local
       - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -21,9 +22,11 @@ services:
     restart: always
     ports:
       - "3000:3000"
+    # Carga de variables desde el .env del backend para evitar duplicación
     env_file:
       - ./backend/.env
     environment:
+      # Sobrescritura del host de BD para la red interna de Docker
       - DB_HOST=db
     depends_on:
       - db

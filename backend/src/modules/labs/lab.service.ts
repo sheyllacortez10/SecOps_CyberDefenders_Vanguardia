@@ -31,12 +31,12 @@ const mapLabDetail = (lab: any, vulnerability: any, activities: any[]) => ({
   vulnerableCode: lab.vulnerable_code,
   vulnerability: vulnerability
     ? {
-        id: vulnerability.id,
-        name: vulnerability.name,
-        owaspCategory: vulnerability.owasp_category,
-        severity: vulnerability.severity,
-        cweId: vulnerability.cwe_id
-      }
+      id: vulnerability.id,
+      name: vulnerability.name,
+      owaspCategory: vulnerability.owasp_category,
+      severity: vulnerability.severity,
+      cweId: vulnerability.cwe_id
+    }
     : null,
   activities: activities.map((activity) => ({
     id: activity.id,
@@ -129,7 +129,7 @@ export const labService = {
 
         // Puntos base por actividad
         const basePoints = Math.floor(lab.points / totalActivities);
-        
+
         // Si es la última actividad en resolver del lab, sumamos los puntos restantes
         if (solvedBefore + 1 === totalActivities) {
           pointsEarned = lab.points - (basePoints * (totalActivities - 1));
