@@ -6,6 +6,7 @@ const router = Router();
 
 router.get('/labs', asyncHandler(getLabs));
 router.get('/labs/:id', asyncHandler(getLabById));
+// respuestas de actividades de laboratorio
 router.post('/labs/:id/activities/:activityId/submit', asyncHandler(submitActivityAnswer));
 
 export default router;
