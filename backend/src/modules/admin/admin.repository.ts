@@ -52,23 +52,55 @@ export const adminRepository = {
   },
 
   async replaceActivities(labId: string, activities: Array<{ id: string; type: string; question: string; options: unknown; validationStrategy: string; correctAnswer: unknown; explanation?: string }>) {
-    await pool.query('DELETE FROM activities WHERE lab_id = $1', [labId]);
+    // 1. Obtener IDs de actividades existentes en la BD
+    const existingResult = await pool.query('SELECT id FROM activities WHERE lab_id = $1', [labId]);
+    const existingIds = existingResult.rows.map(r => r.id);
 
+    // 2. Identificar cuáles se deben eliminar (están en la BD pero no en el nuevo listado)
+    const newIds = new Set(activities.map(a => a.id));
+    const idsToDelete = existingIds.filter(id => !newIds.has(id));
+
+    if (idsToDelete.length > 0) {
+      // Eliminar las que ya no están en la lista
+      await pool.query('DELETE FROM activities WHERE id = ANY($1)', [idsToDelete]);
+    }
+
+    // 3. Insertar o actualizar cada actividad
     for (const activity of activities) {
-      await pool.query(
-        `INSERT INTO activities (id, lab_id, type, question, options, validation_strategy, correct_answer, explanation)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [
-          activity.id,
-          labId,
-          activity.type,
-          activity.question,
-          toJsonbParam(activity.options),
-          activity.validationStrategy,
-          toJsonbParam(activity.correctAnswer),
-          activity.explanation ?? null
-        ]
-      );
+      if (existingIds.includes(activity.id)) {
+        // Actualizar
+        await pool.query(
+          `UPDATE activities
+           SET type = $1, question = $2, options = $3, validation_strategy = $4, correct_answer = $5, explanation = $6
+           WHERE id = $7 AND lab_id = $8`,
+          [
+            activity.type,
+            activity.question,
+            toJsonbParam(activity.options),
+            activity.validationStrategy,
+            toJsonbParam(activity.correctAnswer),
+            activity.explanation ?? null,
+            activity.id,
+            labId
+          ]
+        );
+      } else {
+        // Insertar
+        await pool.query(
+          `INSERT INTO activities (id, lab_id, type, question, options, validation_strategy, correct_answer, explanation)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [
+            activity.id,
+            labId,
+            activity.type,
+            activity.question,
+            toJsonbParam(activity.options),
+            activity.validationStrategy,
+            toJsonbParam(activity.correctAnswer),
+            activity.explanation ?? null
+          ]
+        );
+      }
     }
   },
 

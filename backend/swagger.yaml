@@ -183,12 +183,12 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
-  /labs/{id}/submit:
+  /labs/{id}/activities/{activityId}/submit:
     post:
       tags: [Resolution]
       summary: Enviar respuesta de un laboratorio
       description: |
-        Valida la respuesta del estudiante para una actividad del laboratorio.
+        Valiga la respuesta del estudiante para una actividad del laboratorio.
         El sistema puede utilizar coincidencia exacta, lista de respuestas válidas
         o validación por palabras clave. Retorna retroalimentación inmediata y
         actualiza el puntaje del usuario.
@@ -197,6 +197,7 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/labId'
+        - $ref: '#/components/parameters/activityId'
       requestBody:
         required: true
         content:
@@ -339,6 +340,29 @@ paths:
           $ref: '#/components/responses/Forbidden'
 
   /admin/labs/{id}:
+    get:
+      tags: [Admin]
+      summary: Obtener detalle completo de laboratorio para edición
+      description: Retorna el detalle completo de un laboratorio, incluyendo las respuestas correctas de sus actividades. Requiere rol `admin`.
+      operationId: getLabByIdForAdmin
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/labId'
+      responses:
+        '200':
+          description: Detalle del laboratorio para administrador
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LabDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
     put:
       tags: [Admin]
       summary: Editar laboratorio precargado
@@ -439,6 +463,14 @@ components:
       schema:
         type: string
         example: "user-42"
+    activityId:
+      name: activityId
+      in: path
+      required: true
+      description: Identificador único de la actividad
+      schema:
+        type: string
+        example: "act-001"
 
   responses:
     BadRequest:

@@ -2,10 +2,50 @@ import pool from '../../db';
 
 export const progressRepository = {
   async findProgressByUserId(userId: string) {
+    // Otorgar insignias retroactivamente si cumple con todas las condiciones
+    await pool.query(
+      `INSERT INTO user_badges (user_id, badge_id)
+       SELECT DISTINCT $1, b.id
+       FROM badges b
+       JOIN (
+         SELECT category, COUNT(DISTINCT id) AS completed_count
+         FROM (
+           SELECT l.category, l.id
+           FROM labs l
+           JOIN activities act ON act.lab_id = l.id
+           LEFT JOIN attempts att ON att.lab_id = l.id AND att.activity_id = act.id AND att.user_id = $1 AND att.correct = true
+           GROUP BY l.id, l.category
+           HAVING COUNT(act.id) = COUNT(att.id) AND COUNT(act.id) > 0
+         ) completed_labs
+         GROUP BY category
+       ) user_completed ON LOWER(user_completed.category) = LOWER(b.category)
+       JOIN (
+         SELECT category, COUNT(id) AS total_count
+         FROM labs
+         GROUP BY category
+       ) total_labs ON LOWER(total_labs.category) = LOWER(b.category)
+       WHERE user_completed.completed_count = total_labs.total_count
+       ON CONFLICT (user_id, badge_id) DO NOTHING`,
+      [userId]
+    );
+
     const result = await pool.query(
-      `SELECT user_id, total_points, completed_labs
-       FROM user_progress
-       WHERE user_id = $1
+      `SELECT 
+         up.user_id, 
+         up.total_points,
+         (
+           SELECT COUNT(*)::int
+           FROM (
+             SELECT l.id
+             FROM labs l
+             JOIN activities act ON act.lab_id = l.id
+             LEFT JOIN attempts att ON att.lab_id = l.id AND att.activity_id = act.id AND att.user_id = $1 AND att.correct = true
+             GROUP BY l.id
+             HAVING COUNT(act.id) = COUNT(att.id) AND COUNT(act.id) > 0
+           ) completed
+         ) AS completed_labs
+       FROM user_progress up
+       WHERE up.user_id = $1
        LIMIT 1`,
       [userId]
     );
@@ -28,9 +68,19 @@ export const progressRepository = {
       `SELECT
          l.id AS lab_id,
          l.title AS lab_title,
-         EXISTS (
-           SELECT 1 FROM attempts a WHERE a.user_id = $1 AND a.lab_id = l.id AND a.correct = true
-         ) AS completed,
+         ((
+           SELECT COUNT(DISTINCT a.activity_id)::int 
+           FROM attempts a 
+           WHERE a.user_id = $1 AND a.lab_id = l.id AND a.correct = true
+         ) = (
+           SELECT COUNT(*)::int 
+           FROM activities act 
+           WHERE act.lab_id = l.id
+         ) AND (
+           SELECT COUNT(*)::int 
+           FROM activities act 
+           WHERE act.lab_id = l.id
+         ) > 0) AS completed,
          COALESCE((SELECT SUM(points_earned) FROM attempts a WHERE a.user_id = $1 AND a.lab_id = l.id), 0)::int AS points_earned,
          COALESCE((SELECT COUNT(*) FROM attempts a WHERE a.user_id = $1 AND a.lab_id = l.id), 0)::int AS attempts
        FROM labs l

