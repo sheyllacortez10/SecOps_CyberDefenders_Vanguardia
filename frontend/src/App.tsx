@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 
 type Role = 'student' | 'admin';
-type View = 'auth' | 'dashboard' | 'lab' | 'create-lab' | 'view-labs' | 'admin-lab-detail' | 'review-lab';
+type View = 'auth' | 'dashboard' | 'lab' | 'create-lab' | 'view-labs' | 'admin-lab-detail' | 'review-lab' | 'edit-lab';
 
 interface Lab {
   id: string;
@@ -42,13 +42,103 @@ export default function App() {
   const [adminSelectedLab, setAdminSelectedLab] = useState<any | null>(null);
   const [adminLabLoading, setAdminLabLoading] = useState(false);
 
+  // ── Edición de lab ──
+  const [editLab, setEditLab] = useState<any | null>(null);
+  const [editActivities, setEditActivities] = useState<any[]>([]);
+  const [editSuccess, setEditSuccess] = useState(false);
+
   // ── Vista revisión de respuestas (estudiante) ──
   const [reviewLabData, setReviewLabData] = useState<any | null>(null);
   const [reviewHistory, setReviewHistory] = useState<any[]>([]);
   const [reviewLoading, setReviewLoading] = useState(false);
 
   // ── Formulario Crear Lab ──
-  const [newLab, setNewLab] = useState({ titulo: '', descripcion: '', categoria: '', dificultad: 'Fácil', puntajeMaximo: 100 });
+  const emptyActivity = () => ({
+    type: 'multiple_choice',
+    question: '',
+    options: ['', '', '', ''],
+    validationStrategy: 'exact_match',
+    correctAnswer: '',
+    explanation: ''
+  });
+
+  const [newLab, setNewLab] = useState({
+    titulo: '',
+    descripcion: '',
+    categoria: '',
+    dificultad: 'Fácil',
+    puntajeMaximo: 100,
+    owaspRef: '',
+    theory: '',
+    vulnerableCode: '',
+    vulnerabilityId: ''
+  });
+  const [newActivities, setNewActivities] = useState([emptyActivity()]);
+
+  // ── Import JSON ──
+  const [jsonInput, setJsonInput] = useState('');
+  const [jsonError, setJsonError] = useState('');
+  const [jsonSuccess, setJsonSuccess] = useState('');
+
+  const handleJsonImport = async () => {
+    setJsonError('');
+    setJsonSuccess('');
+    let parsed: any;
+    try {
+      parsed = JSON.parse(jsonInput.trim());
+    } catch {
+      setJsonError('❌ El texto no es un JSON válido. Revisa la sintaxis.');
+      return;
+    }
+
+    // Validar campos requeridos
+    const required = ['title', 'description', 'category', 'difficulty', 'points', 'theory', 'vulnerableCode'];
+    const missing = required.filter(f => !parsed[f]);
+    if (missing.length > 0) {
+      setJsonError(`❌ Faltan campos requeridos: ${missing.join(', ')}`);
+      return;
+    }
+
+    if (!parsed.activities || parsed.activities.length === 0) {
+      setJsonError('❌ El JSON debe tener al menos una actividad en el campo "activities".');
+      return;
+    }
+
+    const difficultyMapping: Record<string, string> = {
+      'Fácil': 'beginner', 'Medio': 'intermediate', 'Difícil': 'advanced',
+      'beginner': 'beginner', 'intermediate': 'intermediate', 'advanced': 'advanced'
+    };
+
+    try {
+      const body = {
+        title: parsed.title,
+        description: parsed.description,
+        category: parsed.category.toLowerCase(),
+        owaspRef: parsed.owaspRef || '',
+        difficulty: difficultyMapping[parsed.difficulty] || 'beginner',
+        points: Number(parsed.points),
+        theory: parsed.theory,
+        vulnerableCode: parsed.vulnerableCode,
+        vulnerabilityId: parsed.vulnerabilityId || null,
+        activities: parsed.activities.map((act: any) => ({
+          type: act.type,
+          question: act.question,
+          options: act.options ?? null,
+          validationStrategy: act.validationStrategy,
+          correctAnswer: act.correctAnswer,
+          explanation: act.explanation ?? null
+        }))
+      };
+
+      await apiCall('/api/admin/labs', { method: 'POST', body: JSON.stringify(body) });
+      setJsonSuccess(`✅ Laboratorio "${parsed.title}" creado exitosamente.`);
+      setJsonInput('');
+      loadLabs();
+      loadAdminMetrics();
+    } catch (err: any) {
+      setJsonError(`❌ Error al crear el laboratorio: ${err.message}`);
+    }
+  };
   const [createSuccess, setCreateSuccess] = useState(false);
 
   // Helper para mapear labs del backend al frontend
@@ -232,6 +322,87 @@ export default function App() {
     }
   };
 
+  const handleEditLab = async (labId: string) => {
+    setAdminLabLoading(true);
+    try {
+      const data = await apiCall(`/api/labs/${labId}`);
+      const diffLabel = (d: string) => d === 'beginner' ? 'Fácil' : d === 'intermediate' ? 'Medio' : 'Difícil';
+      setEditLab({
+        id: data.id,
+        titulo: data.title,
+        descripcion: data.description,
+        categoria: data.category,
+        owaspRef: data.owaspRef || '',
+        dificultad: diffLabel(data.difficulty),
+        puntajeMaximo: data.points,
+        theory: data.theory,
+        vulnerableCode: data.vulnerableCode,
+        vulnerabilityId: data.vulnerability?.id || ''
+      });
+      setEditActivities(data.activities.map((a: any) => ({
+        id: a.id,
+        type: a.type,
+        question: a.question,
+        options: a.options || ['', '', '', ''],
+        validationStrategy: a.validationStrategy,
+        correctAnswer: typeof a.correctAnswer === 'string' ? a.correctAnswer : JSON.stringify(a.correctAnswer),
+        explanation: a.explanation || ''
+      })));
+      setView('edit-lab');
+    } catch (err: any) {
+      alert(err.message || 'Error al cargar el laboratorio.');
+    } finally {
+      setAdminLabLoading(false);
+    }
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editLab) return;
+
+    for (const act of editActivities) {
+      if (!act.question || !act.correctAnswer) {
+        alert('Cada actividad debe tener pregunta y respuesta correcta.');
+        return;
+      }
+    }
+
+    try {
+      const difficultyMapping: Record<string, string> = {
+        'Fácil': 'beginner', 'Medio': 'intermediate', 'Difícil': 'advanced'
+      };
+
+      const body = {
+        title: editLab.titulo,
+        description: editLab.descripcion,
+        category: editLab.categoria.toLowerCase(),
+        owaspRef: editLab.owaspRef,
+        difficulty: difficultyMapping[editLab.dificultad] || 'beginner',
+        points: editLab.puntajeMaximo,
+        theory: editLab.theory,
+        vulnerableCode: editLab.vulnerableCode,
+        vulnerabilityId: editLab.vulnerabilityId || null,
+        activities: editActivities.map(act => ({
+          id: act.id,
+          type: act.type,
+          question: act.question,
+          options: act.type === 'multiple_choice' ? act.options.filter((o: string) => o.trim() !== '') : undefined,
+          validationStrategy: act.validationStrategy,
+          correctAnswer: act.correctAnswer,
+          explanation: act.explanation
+        }))
+      };
+
+      await apiCall(`/api/admin/labs/${editLab.id}`, { method: 'PUT', body: JSON.stringify(body) });
+      setEditSuccess(true);
+      setTimeout(() => setEditSuccess(false), 3000);
+      loadLabs();
+      loadAdminMetrics();
+    } catch (err: any) {
+      alert(err.message || 'Error al guardar los cambios.');
+    }
+  };
+
   const handleAdminViewLab = async (labId: string) => {
     setAdminLabLoading(true);
     try {
@@ -264,7 +435,15 @@ export default function App() {
 
   const handleCreateLab = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newLab.titulo || !newLab.descripcion || !newLab.categoria) return;
+    if (!newLab.titulo || !newLab.descripcion || !newLab.categoria || !newLab.theory || !newLab.vulnerableCode) return;
+
+    // Validar que todas las actividades tengan pregunta y respuesta correcta
+    for (const act of newActivities) {
+      if (!act.question || !act.correctAnswer) {
+        alert('Cada actividad debe tener una pregunta y una respuesta correcta.');
+        return;
+      }
+    }
 
     try {
       const difficultyMapping: Record<string, string> = {
@@ -277,26 +456,20 @@ export default function App() {
         title: newLab.titulo,
         description: newLab.descripcion,
         category: newLab.categoria.toLowerCase(),
-        owaspRef: 'A03:2021',
+        owaspRef: newLab.owaspRef || 'A03:2021',
         difficulty: difficultyMapping[newLab.dificultad] || 'beginner',
         points: newLab.puntajeMaximo,
-        theory: 'Las inyecciones de código ocurren cuando las entradas del usuario se concatenan directamente en sentencias que luego se ejecutan. En el caso de SQL, esto permite manipular la lógica de la consulta original.',
-        vulnerableCode: 'const query = `SELECT * FROM users WHERE email = \'${email}\' AND password = \'${password}\'`;',
-        vulnerabilityId: 'vuln-sqli',
-        activities: [
-          {
-            type: 'multiple_choice',
-            question: '¿Cuál es la mitigación correcta contra la inyección SQL?',
-            options: [
-              'Validar el formato del email en el cliente',
-              'Usar consultas parametrizadas (Prepared Statements)',
-              'Codificar el texto de entrada en base64'
-            ],
-            validationStrategy: 'predefined_list',
-            correctAnswer: 'Usar consultas parametrizadas (Prepared Statements)',
-            explanation: 'Las consultas parametrizadas envían la consulta y los parámetros de forma separada al motor SQL, previniendo que la entrada altere la estructura del comando.'
-          }
-        ]
+        theory: newLab.theory,
+        vulnerableCode: newLab.vulnerableCode,
+        vulnerabilityId: newLab.vulnerabilityId || null,
+        activities: newActivities.map(act => ({
+          type: act.type,
+          question: act.question,
+          options: act.type === 'multiple_choice' ? act.options.filter(o => o.trim() !== '') : undefined,
+          validationStrategy: act.validationStrategy,
+          correctAnswer: act.correctAnswer,
+          explanation: act.explanation
+        }))
       };
 
       await apiCall('/api/admin/labs', {
@@ -304,7 +477,8 @@ export default function App() {
         body: JSON.stringify(body)
       });
 
-      setNewLab({ titulo: '', descripcion: '', categoria: '', dificultad: 'Fácil', puntajeMaximo: 100 });
+      setNewLab({ titulo: '', descripcion: '', categoria: '', dificultad: 'Fácil', puntajeMaximo: 100, owaspRef: '', theory: '', vulnerableCode: '', vulnerabilityId: '' });
+      setNewActivities([emptyActivity()]);
       setCreateSuccess(true);
       setTimeout(() => setCreateSuccess(false), 3000);
       loadLabs();
@@ -583,7 +757,10 @@ export default function App() {
             ← Volver al Panel
           </button>
 
-          <div className="card" style={{ maxWidth: 680, borderLeft: '4px solid var(--color-primary)' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,2fr) minmax(0,1fr)', gap: '1.5rem', alignItems: 'start' }}>
+
+            {/* ── FORMULARIO MANUAL ── */}
+            <div className="card" style={{ borderLeft: '4px solid var(--color-primary)' }}>
             <h2 style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--color-primary)', marginBottom: '0.5rem' }}>
               Crear Nuevo Laboratorio
             </h2>
@@ -598,69 +775,173 @@ export default function App() {
             )}
 
             <form onSubmit={handleCreateLab} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-              <div>
-                <label style={labelStyle}>Título del Laboratorio</label>
-                <input
-                  style={inputStyle}
-                  type="text"
-                  placeholder="Ej: XSS Reflejado en Buscador"
-                  value={newLab.titulo}
-                  onChange={e => setNewLab({ ...newLab, titulo: e.target.value })}
-                  required
-                />
-              </div>
 
-              <div>
-                <label style={labelStyle}>Descripción</label>
-                <textarea
-                  style={{ ...inputStyle, minHeight: 100, resize: 'vertical' }}
-                  placeholder="Describe el objetivo del laboratorio..."
-                  value={newLab.descripcion}
-                  onChange={e => setNewLab({ ...newLab, descripcion: e.target.value })}
-                  required
-                />
-              </div>
+              {/* ── INFO BÁSICA ── */}
+              <div style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '1.25rem' }}>
+                <p style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-secondary)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: '1rem' }}>📋 Información General</p>
 
-              <div>
-                <label style={labelStyle}>Categoría</label>
-                <input
-                  style={inputStyle}
-                  type="text"
-                  placeholder="Ej: Injection, XSS, Autenticación..."
-                  value={newLab.categoria}
-                  onChange={e => setNewLab({ ...newLab, categoria: e.target.value })}
-                  required
-                />
-              </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  <div>
+                    <label style={labelStyle}>Título del Laboratorio *</label>
+                    <input style={inputStyle} type="text" placeholder="Ej: XSS Reflejado en Buscador" value={newLab.titulo} onChange={e => setNewLab({ ...newLab, titulo: e.target.value })} required />
+                  </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                <div>
-                  <label style={labelStyle}>Dificultad</label>
-                  <select
-                    style={{ ...inputStyle, cursor: 'pointer' }}
-                    value={newLab.dificultad}
-                    onChange={e => setNewLab({ ...newLab, dificultad: e.target.value })}
-                  >
-                    <option value="Fácil">Fácil</option>
-                    <option value="Medio">Medio</option>
-                    <option value="Difícil">Difícil</option>
-                  </select>
-                </div>
-                <div>
-                  <label style={labelStyle}>Puntaje Máximo</label>
-                  <input
-                    style={inputStyle}
-                    type="number"
-                    min={50}
-                    max={500}
-                    step={50}
-                    value={newLab.puntajeMaximo}
-                    onChange={e => setNewLab({ ...newLab, puntajeMaximo: Number(e.target.value) })}
-                    required
-                  />
+                  <div>
+                    <label style={labelStyle}>Descripción *</label>
+                    <textarea style={{ ...inputStyle, minHeight: 80, resize: 'vertical' }} placeholder="Describe el objetivo del laboratorio y qué aprenderá el estudiante..." value={newLab.descripcion} onChange={e => setNewLab({ ...newLab, descripcion: e.target.value })} required />
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                    <div>
+                      <label style={labelStyle}>Categoría *</label>
+                      <input style={inputStyle} type="text" placeholder="Ej: injection, xss, auth..." value={newLab.categoria} onChange={e => setNewLab({ ...newLab, categoria: e.target.value })} required />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Referencia OWASP</label>
+                      <input style={inputStyle} type="text" placeholder="Ej: A03:2021-Injection" value={newLab.owaspRef} onChange={e => setNewLab({ ...newLab, owaspRef: e.target.value })} />
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
+                    <div>
+                      <label style={labelStyle}>Dificultad</label>
+                      <select style={{ ...inputStyle, cursor: 'pointer' }} value={newLab.dificultad} onChange={e => setNewLab({ ...newLab, dificultad: e.target.value })}>
+                        <option value="Fácil">Fácil</option>
+                        <option value="Medio">Medio</option>
+                        <option value="Difícil">Difícil</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Puntaje Máximo</label>
+                      <input style={inputStyle} type="number" min={50} max={500} step={50} value={newLab.puntajeMaximo} onChange={e => setNewLab({ ...newLab, puntajeMaximo: Number(e.target.value) })} required />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>ID Vulnerabilidad</label>
+                      <input style={inputStyle} type="text" placeholder="Ej: vuln-sqli" value={newLab.vulnerabilityId} onChange={e => setNewLab({ ...newLab, vulnerabilityId: e.target.value })} />
+                    </div>
+                  </div>
                 </div>
               </div>
 
+              {/* ── CONTENIDO TÉCNICO ── */}
+              <div style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '1.25rem' }}>
+                <p style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-secondary)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: '1rem' }}>📖 Contenido Técnico</p>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  <div>
+                    <label style={labelStyle}>Teoría del Ataque *</label>
+                    <textarea style={{ ...inputStyle, minHeight: 100, resize: 'vertical', fontFamily: 'var(--font-sans)' }} placeholder="Explica la vulnerabilidad, cómo ocurre y cómo prevenirla..." value={newLab.theory} onChange={e => setNewLab({ ...newLab, theory: e.target.value })} required />
+                  </div>
+
+                  <div>
+                    <label style={labelStyle}>Código Vulnerable *</label>
+                    <textarea style={{ ...inputStyle, minHeight: 120, resize: 'vertical', fontFamily: 'var(--font-mono)', fontSize: '0.85rem' }} placeholder={'Ej: const query = `SELECT * FROM users WHERE email = \'${email}\'`;'} value={newLab.vulnerableCode} onChange={e => setNewLab({ ...newLab, vulnerableCode: e.target.value })} required />
+                  </div>
+                </div>
+              </div>
+
+              {/* ── ACTIVIDADES / PREGUNTAS ── */}
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                  <p style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-secondary)', textTransform: 'uppercase', letterSpacing: '0.07em' }}>🎯 Preguntas del Laboratorio</p>
+                  <button type="button" className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '0.4rem 0.85rem' }}
+                    onClick={() => setNewActivities([...newActivities, emptyActivity()])}>
+                    + Agregar Pregunta
+                  </button>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                  {newActivities.map((act, idx) => (
+                    <div key={idx} style={{ background: 'rgba(0,0,0,0.15)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+
+                      {/* Header pregunta */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-primary)' }}>Pregunta {idx + 1}</span>
+                        {newActivities.length > 1 && (
+                          <button type="button" style={{ background: 'none', border: 'none', color: 'var(--color-danger)', cursor: 'pointer', fontSize: '0.8rem', padding: '0.2rem 0.5rem' }}
+                            onClick={() => setNewActivities(newActivities.filter((_, i) => i !== idx))}>
+                            🗑️ Eliminar
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Tipo y estrategia */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                        <div>
+                          <label style={labelStyle}>Tipo de Pregunta</label>
+                          <select style={{ ...inputStyle, cursor: 'pointer' }} value={act.type}
+                            onChange={e => setNewActivities(newActivities.map((a, i) => i === idx ? { ...a, type: e.target.value } : a))}>
+                            <option value="multiple_choice">Opción Múltiple</option>
+                            <option value="fill_in">Completar</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Estrategia de Validación</label>
+                          <select style={{ ...inputStyle, cursor: 'pointer' }} value={act.validationStrategy}
+                            onChange={e => setNewActivities(newActivities.map((a, i) => i === idx ? { ...a, validationStrategy: e.target.value } : a))}>
+                            <option value="exact_match">Coincidencia Exacta</option>
+                            <option value="predefined_list">Lista Predefinida</option>
+                            <option value="keyword_match">Palabras Clave</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* Pregunta */}
+                      <div>
+                        <label style={labelStyle}>Enunciado de la Pregunta *</label>
+                        <textarea style={{ ...inputStyle, minHeight: 70, resize: 'vertical' }} placeholder="¿Cuál es la forma correcta de prevenir esta vulnerabilidad?" value={act.question}
+                          onChange={e => setNewActivities(newActivities.map((a, i) => i === idx ? { ...a, question: e.target.value } : a))} required />
+                      </div>
+
+                      {/* Opciones (solo multiple_choice) */}
+                      {act.type === 'multiple_choice' && (
+                        <div>
+                          <label style={labelStyle}>Opciones de Respuesta</label>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                            {act.options.map((opt, oIdx) => (
+                              <div key={oIdx} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', minWidth: '20px' }}>{String.fromCharCode(65 + oIdx)}.</span>
+                                <input style={{ ...inputStyle, flex: 1 }} type="text" placeholder={`Opción ${String.fromCharCode(65 + oIdx)}`} value={opt}
+                                  onChange={e => {
+                                    const newOpts = [...act.options];
+                                    newOpts[oIdx] = e.target.value;
+                                    setNewActivities(newActivities.map((a, i) => i === idx ? { ...a, options: newOpts } : a));
+                                  }} />
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Respuesta correcta */}
+                      <div>
+                        <label style={labelStyle}>Respuesta Correcta * {act.type === 'multiple_choice' ? '(debe coincidir exactamente con una opción)' : ''}</label>
+                        {act.type === 'multiple_choice' ? (
+                          <select style={{ ...inputStyle, cursor: 'pointer' }} value={act.correctAnswer}
+                            onChange={e => setNewActivities(newActivities.map((a, i) => i === idx ? { ...a, correctAnswer: e.target.value } : a))}>
+                            <option value="">-- Selecciona la respuesta correcta --</option>
+                            {act.options.filter(o => o.trim() !== '').map((opt, oIdx) => (
+                              <option key={oIdx} value={opt}>{String.fromCharCode(65 + oIdx)}. {opt}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <input style={inputStyle} type="text" placeholder="Escribe la respuesta correcta exacta..." value={act.correctAnswer}
+                            onChange={e => setNewActivities(newActivities.map((a, i) => i === idx ? { ...a, correctAnswer: e.target.value } : a))} required />
+                        )}
+                      </div>
+
+                      {/* Explicación */}
+                      <div>
+                        <label style={labelStyle}>Explicación de la Respuesta</label>
+                        <textarea style={{ ...inputStyle, minHeight: 70, resize: 'vertical' }} placeholder="Explica por qué esta es la respuesta correcta..." value={act.explanation}
+                          onChange={e => setNewActivities(newActivities.map((a, i) => i === idx ? { ...a, explanation: e.target.value } : a))} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* ── BOTONES ── */}
               <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem' }}>
                 <button type="submit" className="btn btn-primary" style={{ flex: 1, justifyContent: 'center' }}>
                   + Crear Laboratorio
@@ -670,6 +951,79 @@ export default function App() {
                 </button>
               </div>
             </form>
+          </div>
+
+            {/* ── PANEL JSON ── */}
+            <div className="card" style={{ borderLeft: '4px solid var(--color-warning)', position: 'sticky', top: '1rem' }}>
+              <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--color-warning)', marginBottom: '0.4rem' }}>
+                📄 Importar desde JSON
+              </h3>
+              <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '1.25rem', lineHeight: 1.5 }}>
+                Pega un JSON con el formato correcto y crea el laboratorio automáticamente.
+              </p>
+
+              {/* Ejemplo colapsable */}
+              <details style={{ marginBottom: '1rem' }}>
+                <summary style={{ fontSize: '0.75rem', color: 'var(--color-secondary)', cursor: 'pointer', userSelect: 'none', marginBottom: '0.5rem' }}>
+                  Ver formato esperado
+                </summary>
+                <pre style={{ fontSize: '0.7rem', fontFamily: 'var(--font-mono)', background: 'rgba(0,0,0,0.3)', padding: '0.75rem', borderRadius: '6px', overflowX: 'auto', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', marginTop: '0.5rem' }}>
+{`{
+  "title": "Nombre del lab",
+  "description": "Descripción...",
+  "category": "injection",
+  "owaspRef": "A03:2021",
+  "difficulty": "beginner",
+  "points": 100,
+  "theory": "Explicación...",
+  "vulnerableCode": "const q = ...",
+  "vulnerabilityId": "vuln-sqli",
+  "activities": [
+    {
+      "type": "multiple_choice",
+      "question": "¿Pregunta?",
+      "options": ["A", "B", "C"],
+      "validationStrategy": "exact_match",
+      "correctAnswer": "B",
+      "explanation": "Porque..."
+    }
+  ]
+}`}
+                </pre>
+              </details>
+
+              <div>
+                <label style={{ ...labelStyle, color: 'var(--color-warning)' }}>JSON del Laboratorio</label>
+                <textarea
+                  style={{ ...inputStyle, minHeight: 220, resize: 'vertical', fontFamily: 'var(--font-mono)', fontSize: '0.78rem', lineHeight: 1.5 }}
+                  placeholder={'{\n  "title": "...",\n  "activities": [...]\n}'}
+                  value={jsonInput}
+                  onChange={e => { setJsonInput(e.target.value); setJsonError(''); setJsonSuccess(''); }}
+                />
+              </div>
+
+              {jsonError && (
+                <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: 'rgba(255,74,90,0.08)', border: '1px solid rgba(255,74,90,0.25)', borderRadius: '6px', fontSize: '0.82rem', color: 'var(--color-danger)', lineHeight: 1.5 }}>
+                  {jsonError}
+                </div>
+              )}
+
+              {jsonSuccess && (
+                <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: 'rgba(0,245,160,0.08)', border: '1px solid rgba(0,245,160,0.25)', borderRadius: '6px', fontSize: '0.82rem', color: 'var(--color-primary)', lineHeight: 1.5 }}>
+                  {jsonSuccess}
+                </div>
+              )}
+
+              <button
+                className="btn btn-primary"
+                style={{ width: '100%', justifyContent: 'center', marginTop: '1rem', background: 'linear-gradient(135deg, var(--color-warning), #ff8c00)', color: '#000' }}
+                onClick={handleJsonImport}
+                disabled={!jsonInput.trim()}
+              >
+                Crear desde JSON
+              </button>
+            </div>
+
           </div>
         </main>
       )}
@@ -742,6 +1096,13 @@ export default function App() {
                         onClick={(e) => { e.stopPropagation(); handleAdminViewLab(lab.id); }}
                       >
                         🔍 Ver Detalle
+                      </button>
+                      <button
+                        className="btn btn-secondary"
+                        style={{ padding: '0.4rem 0.9rem', fontSize: '0.8rem', color: 'var(--color-warning)', border: '1px solid rgba(255,184,0,0.3)' }}
+                        onClick={(e) => { e.stopPropagation(); handleEditLab(lab.id); }}
+                      >
+                        ✏️ Editar
                       </button>
                       <button
                         className="btn"
@@ -1129,6 +1490,195 @@ export default function App() {
               </div>
             );
           })()}
+        </main>
+      )}
+
+      {/* ── NOTIFICACIÓN FLOTANTE ── */}
+      {editSuccess && (
+        <div style={{ position: 'fixed', bottom: '2rem', right: '2rem', zIndex: 9999, padding: '1rem 1.5rem', background: 'rgba(20,28,48,0.97)', border: '1px solid rgba(0,245,160,0.4)', borderRadius: 'var(--radius-md)', color: 'var(--color-primary)', fontSize: '0.9rem', fontWeight: 600, boxShadow: '0 8px 32px rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', gap: '0.75rem' }} className="animate-fade-in">
+          ✅ Laboratorio actualizado exitosamente.
+        </div>
+      )}
+
+      {/* ── EDIT LAB (admin) ── */}
+      {view === 'edit-lab' && editLab && (
+        <main className="animate-fade-in">
+          <button className="btn btn-secondary" style={{ marginBottom: '1.5rem' }} onClick={() => { setEditLab(null); setView('view-labs'); }}>
+            ← Volver a Laboratorios
+          </button>
+
+          <div className="card" style={{ borderLeft: '4px solid var(--color-warning)' }}>
+            <h2 style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--color-warning)', marginBottom: '0.5rem' }}>
+              ✏️ Editar Laboratorio
+            </h2>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '2rem' }}>
+              Modifica los campos del laboratorio. Los cambios se guardan en la base de datos.
+            </p>
+
+            <form onSubmit={handleSaveEdit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+
+              {/* INFO BÁSICA */}
+              <div style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '1.25rem' }}>
+                <p style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-warning)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: '1rem' }}>📋 Información General</p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  <div>
+                    <label style={labelStyle}>Título *</label>
+                    <input style={inputStyle} type="text" value={editLab.titulo} onChange={e => setEditLab({ ...editLab, titulo: e.target.value })} required />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Descripción *</label>
+                    <textarea style={{ ...inputStyle, minHeight: 80, resize: 'vertical' }} value={editLab.descripcion} onChange={e => setEditLab({ ...editLab, descripcion: e.target.value })} required />
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                    <div>
+                      <label style={labelStyle}>Categoría *</label>
+                      <input style={inputStyle} type="text" value={editLab.categoria} onChange={e => setEditLab({ ...editLab, categoria: e.target.value })} required />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Referencia OWASP</label>
+                      <input style={inputStyle} type="text" value={editLab.owaspRef} onChange={e => setEditLab({ ...editLab, owaspRef: e.target.value })} />
+                    </div>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
+                    <div>
+                      <label style={labelStyle}>Dificultad</label>
+                      <select style={{ ...inputStyle, cursor: 'pointer' }} value={editLab.dificultad} onChange={e => setEditLab({ ...editLab, dificultad: e.target.value })}>
+                        <option value="Fácil">Fácil</option>
+                        <option value="Medio">Medio</option>
+                        <option value="Difícil">Difícil</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Puntaje Máximo</label>
+                      <input style={inputStyle} type="number" min={50} max={500} step={50} value={editLab.puntajeMaximo} onChange={e => setEditLab({ ...editLab, puntajeMaximo: Number(e.target.value) })} required />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>ID Vulnerabilidad</label>
+                      <input style={inputStyle} type="text" value={editLab.vulnerabilityId} onChange={e => setEditLab({ ...editLab, vulnerabilityId: e.target.value })} />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* CONTENIDO TÉCNICO */}
+              <div style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '1.25rem' }}>
+                <p style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-warning)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: '1rem' }}>📖 Contenido Técnico</p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  <div>
+                    <label style={labelStyle}>Teoría del Ataque *</label>
+                    <textarea style={{ ...inputStyle, minHeight: 100, resize: 'vertical' }} value={editLab.theory} onChange={e => setEditLab({ ...editLab, theory: e.target.value })} required />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Código Vulnerable *</label>
+                    <textarea style={{ ...inputStyle, minHeight: 120, resize: 'vertical', fontFamily: 'var(--font-mono)', fontSize: '0.85rem' }} value={editLab.vulnerableCode} onChange={e => setEditLab({ ...editLab, vulnerableCode: e.target.value })} required />
+                  </div>
+                </div>
+              </div>
+
+              {/* ACTIVIDADES */}
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                  <p style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-warning)', textTransform: 'uppercase', letterSpacing: '0.07em' }}>🎯 Preguntas del Laboratorio</p>
+                  <button type="button" className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '0.4rem 0.85rem' }}
+                    onClick={() => setEditActivities([...editActivities, emptyActivity()])}>
+                    + Agregar Pregunta
+                  </button>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                  {editActivities.map((act, idx) => (
+                    <div key={idx} style={{ background: 'rgba(0,0,0,0.15)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-warning)' }}>Pregunta {idx + 1}</span>
+                        {editActivities.length > 1 && (
+                          <button type="button" style={{ background: 'none', border: 'none', color: 'var(--color-danger)', cursor: 'pointer', fontSize: '0.8rem' }}
+                            onClick={() => setEditActivities(editActivities.filter((_, i) => i !== idx))}>
+                            🗑️ Eliminar
+                          </button>
+                        )}
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                        <div>
+                          <label style={labelStyle}>Tipo</label>
+                          <select style={{ ...inputStyle, cursor: 'pointer' }} value={act.type}
+                            onChange={e => setEditActivities(editActivities.map((a, i) => i === idx ? { ...a, type: e.target.value } : a))}>
+                            <option value="multiple_choice">Opción Múltiple</option>
+                            <option value="fill_in">Completar</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Estrategia de Validación</label>
+                          <select style={{ ...inputStyle, cursor: 'pointer' }} value={act.validationStrategy}
+                            onChange={e => setEditActivities(editActivities.map((a, i) => i === idx ? { ...a, validationStrategy: e.target.value } : a))}>
+                            <option value="exact_match">Coincidencia Exacta</option>
+                            <option value="predefined_list">Lista Predefinida</option>
+                            <option value="keyword_match">Palabras Clave</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label style={labelStyle}>Pregunta *</label>
+                        <textarea style={{ ...inputStyle, minHeight: 70, resize: 'vertical' }} value={act.question}
+                          onChange={e => setEditActivities(editActivities.map((a, i) => i === idx ? { ...a, question: e.target.value } : a))} required />
+                      </div>
+
+                      {act.type === 'multiple_choice' && (
+                        <div>
+                          <label style={labelStyle}>Opciones</label>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                            {(act.options || ['', '', '', '']).map((opt: string, oIdx: number) => (
+                              <div key={oIdx} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', minWidth: '20px' }}>{String.fromCharCode(65 + oIdx)}.</span>
+                                <input style={{ ...inputStyle, flex: 1 }} type="text" value={opt}
+                                  onChange={e => {
+                                    const newOpts = [...(act.options || ['', '', '', ''])];
+                                    newOpts[oIdx] = e.target.value;
+                                    setEditActivities(editActivities.map((a, i) => i === idx ? { ...a, options: newOpts } : a));
+                                  }} />
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      <div>
+                        <label style={labelStyle}>Respuesta Correcta *</label>
+                        {act.type === 'multiple_choice' ? (
+                          <select style={{ ...inputStyle, cursor: 'pointer' }} value={act.correctAnswer}
+                            onChange={e => setEditActivities(editActivities.map((a, i) => i === idx ? { ...a, correctAnswer: e.target.value } : a))}>
+                            <option value="">-- Selecciona la respuesta correcta --</option>
+                            {(act.options || []).filter((o: string) => o.trim() !== '').map((opt: string, oIdx: number) => (
+                              <option key={oIdx} value={opt}>{String.fromCharCode(65 + oIdx)}. {opt}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <input style={inputStyle} type="text" value={act.correctAnswer}
+                            onChange={e => setEditActivities(editActivities.map((a, i) => i === idx ? { ...a, correctAnswer: e.target.value } : a))} required />
+                        )}
+                      </div>
+
+                      <div>
+                        <label style={labelStyle}>Explicación</label>
+                        <textarea style={{ ...inputStyle, minHeight: 70, resize: 'vertical' }} value={act.explanation}
+                          onChange={e => setEditActivities(editActivities.map((a, i) => i === idx ? { ...a, explanation: e.target.value } : a))} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem' }}>
+                <button type="submit" className="btn btn-primary" style={{ flex: 1, justifyContent: 'center', background: 'linear-gradient(135deg, var(--color-warning), #ff8c00)', color: '#000' }}>
+                  💾 Guardar Cambios
+                </button>
+                <button type="button" className="btn btn-secondary" onClick={() => { setEditLab(null); setView('view-labs'); }}>
+                  Cancelar
+                </button>
+              </div>
+            </form>
+          </div>
         </main>
       )}
 
