@@ -10,7 +10,8 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: secops_academy
     ports:
-      - "5432:5432"
+      # Mapeo al puerto 5433 en host para evitar conflictos con PostgreSQL local
+      - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
@@ -21,14 +22,12 @@ services:
     restart: always
     ports:
       - "3000:3000"
+    # Carga de variables desde el .env del backend para evitar duplicación
+    env_file:
+      - ./backend/.env
     environment:
-      - PORT=3000
+      # Sobrescritura del host de BD para la red interna de Docker
       - DB_HOST=db
-      - DB_PORT=5432
-      - DB_USER=postgres
-      - DB_PASSWORD=postgres
-      - DB_NAME=secops_academy
-      - JWT_SECRET=supersecurejwtsecretkey123!
     depends_on:
       - db
     volumes:
