@@ -1,0 +1,35 @@
+# Etapa de compilación
+FROM node:18-alpine AS builder
+
+WORKDIR /usr/src/app
+
+COPY package*.json ./
+RUN npm ci
+
+COPY tsconfig.json ./
+COPY src ./src
+
+RUN npm run build
+
+
+# Etapa de producción
+FROM node:18-alpine AS runtime
+
+ENV NODE_ENV=production
+
+WORKDIR /usr/src/app
+
+COPY package*.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+
+COPY --from=builder /usr/src/app/dist ./dist
+
+RUN addgroup -S secops \
+    && adduser -S secops -G secops \
+    && chown -R secops:secops /usr/src/app
+
+USER secops
+
+EXPOSE 3000
+
+CMD ["npm", "start"]
