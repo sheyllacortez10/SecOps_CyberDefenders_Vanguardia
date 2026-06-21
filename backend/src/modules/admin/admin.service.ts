@@ -1,5 +1,6 @@
 import { AppError } from '../../shared/errors/AppError';
 import { adminRepository } from './admin.repository';
+import { labRepository } from '../labs/lab.repository';
 
 const mapLabDetail = (lab: any) => ({
   id: lab.id,
@@ -13,6 +14,36 @@ const mapLabDetail = (lab: any) => ({
   vulnerableCode: lab.vulnerable_code,
   vulnerability: lab.vulnerability_id ? { id: lab.vulnerability_id } : null,
   activities: []
+});
+
+const mapAdminLabDetail = (lab: any, vulnerability: any, activities: any[]) => ({
+  id: lab.id,
+  title: lab.title,
+  description: lab.description,
+  category: lab.category,
+  owaspRef: lab.owasp_ref,
+  difficulty: lab.difficulty,
+  points: lab.points,
+  theory: lab.theory,
+  vulnerableCode: lab.vulnerable_code,
+  vulnerability: vulnerability
+    ? {
+        id: vulnerability.id,
+        name: vulnerability.name,
+        owaspCategory: vulnerability.owasp_category,
+        severity: vulnerability.severity,
+        cweId: vulnerability.cwe_id
+      }
+    : null,
+  activities: activities.map((activity) => ({
+    id: activity.id,
+    type: activity.type,
+    question: activity.question,
+    options: activity.options,
+    validationStrategy: activity.validation_strategy,
+    correctAnswer: activity.correct_answer,
+    explanation: activity.explanation
+  }))
 });
 
 export const adminService = {
@@ -87,5 +118,18 @@ export const adminService = {
 
   async getMetrics() {
     return adminRepository.metrics();
+  },
+
+  async getLabByIdForAdmin(id: string) {
+    const lab = await labRepository.findById(id);
+
+    if (!lab) {
+      throw new AppError(404, 'El recurso solicitado no existe.');
+    }
+
+    const vulnerability = lab.vulnerability_id ? await labRepository.findVulnerabilityById(lab.vulnerability_id) : null;
+    const activities = await labRepository.findActivitiesByLabId(id);
+
+    return mapAdminLabDetail(lab, vulnerability, activities);
   }
 };

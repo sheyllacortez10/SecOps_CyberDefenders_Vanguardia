@@ -112,7 +112,9 @@ ON CONFLICT (id) DO NOTHING;
 INSERT INTO badges (id, name, description, category, icon_url)
 VALUES 
 ('badge-injection', 'Defensor contra Inyecciones', 'Completaste todos los laboratorios de la categoría Injection.', 'injection', '/assets/badges/injection.png'),
-('badge-xss', 'Guardián del Frontend', 'Completaste todos los laboratorios de la categoría XSS.', 'xss', '/assets/badges/xss.png')
+('badge-xss', 'Guardián del Frontend', 'Completaste todos los laboratorios de la categoría XSS.', 'xss', '/assets/badges/xss.png'),
+('badge-auth', 'Maestro de Autenticación', 'Completaste todos los laboratorios de la categoría Autenticación.', 'auth', '/assets/badges/auth.png'),
+('badge-authentication', 'Maestro de Autenticación', 'Completaste todos los laboratorios de la categoría Autenticación.', 'authentication', '/assets/badges/auth.png')
 ON CONFLICT (id) DO NOTHING;
 
 -- Laboratorios

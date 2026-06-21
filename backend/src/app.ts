@@ -1,5 +1,8 @@
 import express from 'express';
 import cors from 'cors';
+import path from 'path';
+import swaggerUi from 'swagger-ui-express';
+import YAML from 'yamljs';
 import healthRoutes from './modules/health/health.routes';
 import authRoutes from './modules/auth/auth.routes';
 import labRoutes from './modules/labs/lab.routes';
@@ -10,8 +13,14 @@ import { errorHandler } from './shared/http/errorHandler';
 
 const app = express();
 
+// Cargar la documentación de Swagger
+const swaggerDocument = YAML.load(path.join(__dirname, '../swagger.yaml'));
+
 app.use(cors());
 app.use(express.json());
+
+// Servir la documentación visual interactiva
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
 app.use('/api', healthRoutes);
 app.use('/api', authRoutes);

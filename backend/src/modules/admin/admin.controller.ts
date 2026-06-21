@@ -20,3 +20,8 @@ export const getMetrics = async (req: Request, res: Response) => {
   const result = await adminService.getMetrics();
   res.status(200).json(result);
 };
+
+export const getLabByIdForAdmin = async (req: Request, res: Response) => {
+  const result = await adminService.getLabByIdForAdmin(req.params.id);
+  res.status(200).json(result);
+};
